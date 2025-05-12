@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>회원 가입</title>
+  </head>
+  <body>
+    <h1>회원 가입</h1>
+    <form action="/signup/" method="post">
+      <label for="userID">UserID:</label>
+      <input type="text" id="userID" name="userID" required /><br /><br />
+
+      <label for="userName">User Name:</label>
+      <input type="text" id="userName" name="userName" required /><br /><br />
+
+      <label for="userPasswordHash">Password:</label>
+      <input
+        type="password"
+        id="userPasswordHash"
+        name="userPasswordHash"
+        required
+      /><br /><br />
+
+      <label for="userCountry">Country:</label>
+      <input
+        type="text"
+        id="userCountry"
+        name="userCountry"
+        required
+      /><br /><br />
+
+      <label for="userLanguage">Language:</label>
+      <input
+        type="text"
+        id="userLanguage"
+        name="userLanguage"
+        required
+      /><br /><br />
+
+      <input type="submit" value="회원 가입" />
+    </form>
+  </body>
+</html>

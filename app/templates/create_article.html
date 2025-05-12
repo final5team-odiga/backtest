@@ -1,0 +1,46 @@
+<!-- app/templates/create_article.html -->
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Create Article</title>
+  </head>
+  <body>
+    <h1>Create New Article</h1>
+    <form action="/create_article/" method="post">
+      <label for="articleTitle">Title:</label><br />
+      <input type="text" id="articleTitle" name="articleTitle" required /><br />
+
+      <label for="articleAuthor">Author:</label><br />
+      <input
+        type="text"
+        id="articleAuthor"
+        name="articleAuthor"
+        required
+      /><br />
+
+      <label for="imageURL">Image URL:</label><br />
+      <input type="text" id="imageURL" name="imageURL" /><br />
+
+      <label for="travelCountry">Country:</label><br />
+      <input
+        type="text"
+        id="travelCountry"
+        name="travelCountry"
+        required
+      /><br />
+
+      <label for="travelCity">City:</label><br />
+      <input type="text" id="travelCity" name="travelCity" required /><br />
+
+      <label for="shareLink">Share Link:</label><br />
+      <input type="text" id="shareLink" name="shareLink" /><br />
+
+      <label for="price">Price:</label><br />
+      <input type="number" step="0.01" id="price" name="price" /><br /><br />
+
+      <input type="submit" value="Create Article" />
+    </form>
+  </body>
+</html>
