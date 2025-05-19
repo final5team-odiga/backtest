@@ -13,12 +13,24 @@ class UserCreate(BaseModel):
 
 
 class ArticleCreate(BaseModel):
-    articleID: str
+    # articleID: str
     articleTitle: str
     articleAuthor: str
     imageURL: Optional[str] = None
     travelCountry: str
     travelCity: str
+    shareLink: Optional[str] = None
+    price: Optional[float] = None
+
+    class Config:
+        orm_mode = True
+
+
+class ArticleUpdate(BaseModel):
+    articleTitle: Optional[str] = None
+    imageURL: Optional[str] = None
+    travelCountry: Optional[str] = None
+    travelCity: Optional[str] = None
     shareLink: Optional[str] = None
     price: Optional[float] = None
 

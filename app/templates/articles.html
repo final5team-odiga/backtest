@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Articles</title>
+  </head>
+  <body>
+    <h1>All Articles</h1>
+    <a href="/create_article/">새 글 작성</a>
+    <ul>
+      {% for art in articles %}
+      <li>
+        <a href="/articles/{{ art.articleID }}">{{ art.articleTitle }}</a>
+        <small
+          >by {{ art.articleAuthor }} ({{ art.createdAt.strftime("%Y-%m-%d")
+          }})</small
+        >
+      </li>
+      {% else %}
+      <li>등록된 글이 없습니다.</li>
+      {% endfor %}
+    </ul>
+  </body>
+</html>
