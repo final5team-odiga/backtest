@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from typing import Optional
+from datetime import datetime
 
 class UserCreate(BaseModel):
     userID: str
@@ -36,3 +37,18 @@ class ArticleUpdate(BaseModel):
 
     class Config:
         orm_mode = True
+
+# comment
+class CommentCreate(BaseModel):
+    articleID: str
+    commentAuthor: str
+    content: str
+
+    class Config:
+        from_attributes = True
+
+class CommentUpdate(BaseModel):
+    content: str
+
+    class Config:
+        from_attributes = True

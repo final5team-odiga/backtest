@@ -1,12 +1,9 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from app.models import User
-from app.schemas import UserCreate
-from sqlalchemy.orm import selectinload
+from app.models import User, Article, Comment
+from app.schemas import UserCreate, ArticleCreate, ArticleUpdate, CommentCreate, CommentUpdate
+from sqlalchemy.orm import selectinload, Session
 from passlib.context import CryptContext
-from sqlalchemy.orm import Session
-from app.models import Article
-from app.schemas import ArticleCreate, ArticleUpdate
 import uuid  # uuid 모듈 임포트
 
 
@@ -92,3 +89,39 @@ async def delete_article(db: AsyncSession, article_id: str):
     await db.delete(db_article)
     await db.commit()
     return db_article
+
+
+############# 댓글 #################
+
+# 댓글 생성
+async def create_comment(db: AsyncSession, comment_in: CommentCreate) -> Comment:
+    db_comment = Comment(
+        articleID=comment_in.articleID,
+        commentAuthor=comment_in.commentAuthor,
+        content=comment_in.content
+    )
+    db.add(db_comment)
+    await db.commit()
+    await db.refresh(db_comment)
+    return db_comment
+
+# 댓글 수정
+async def update_comment(db: AsyncSession, comment_id: int, comment_in: CommentUpdate) -> Comment | None:
+    result = await db.execute(select(Comment).where(Comment.commentID == comment_id))
+    db_comment = result.scalars().first()
+    if not db_comment:
+        return None
+    db_comment.content = comment_in.content
+    await db.commit()
+    await db.refresh(db_comment)
+    return db_comment
+
+# 댓글 삭제
+async def delete_comment(db: AsyncSession, comment_id: int) -> bool:
+    result = await db.execute(select(Comment).where(Comment.commentID == comment_id))
+    db_comment = result.scalars().first()
+    if not db_comment:
+        return False
+    await db.delete(db_comment)
+    await db.commit()
+    return True

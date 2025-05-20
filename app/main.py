@@ -4,11 +4,12 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+
 from app.database import AsyncSessionLocal, get_db
-from app.models import User, Article  # User 모델을 가져온다고 가정합니다.
+from app.models import User, Article, Comment  # User 모델을 가져온다고 가정합니다.
 from sqlalchemy.orm import Session
-from app.schemas import ArticleCreate
-from app.crud import create_article, update_article, delete_article
+from app.schemas import ArticleCreate, ArticleUpdate, CommentCreate, CommentUpdate
+from app.crud import create_article, update_article, delete_article, create_comment, update_comment, delete_comment
 
 app = FastAPI()
 
@@ -110,9 +111,16 @@ async def article_detail(request: Request, article_id: str, db: AsyncSession = D
     article = result.scalars().first()
     if not article:
         raise HTTPException(status_code=404, detail="Article not found")
+    
+    # 댓글 목록 조회
+    comments_result = await db.execute(select(Comment).where(Comment.articleID == article_id).order_by(Comment.createdAt.asc()))
+    comments = comments_result.scalars().all()
+
+    
     return templates.TemplateResponse("article_detail.html", {
         "request": request,
-        "article": article
+        "article": article,
+        "comments": comments
     })
 
 
@@ -192,3 +200,59 @@ async def delete_article_endpoint(
     if not deleted:
         raise HTTPException(status_code=404, detail="Article not found")
     return RedirectResponse(url="/articles/", status_code=303)
+
+
+# 댓글 생성 (기존)
+@app.post("/articles/{article_id}/comments")
+async def post_comment(
+    article_id: str,
+    commentAuthor: str = Form(...),
+    content: str = Form(...),
+    db: AsyncSession = Depends(get_db)
+):
+    # (작성자 검증 생략)
+    await create_comment(db, CommentCreate(
+        articleID=article_id,
+        commentAuthor=commentAuthor,
+        content=content
+    ))
+    return RedirectResponse(f"/articles/{article_id}", status_code=303)
+
+# 댓글 수정 폼
+@app.get("/articles/{article_id}/comments/{comment_id}/edit", response_class=HTMLResponse)
+async def edit_comment_page(request: Request, article_id: str, comment_id: int, db: AsyncSession = Depends(get_db)):
+    # 글 존재 확인
+    art = await db.execute(select(Article).where(Article.articleID == article_id))
+    if not art.scalars().first():
+        raise HTTPException(404, "Article not found")
+    # 댓글 로드
+    com = await db.execute(select(Comment).where(Comment.commentID == comment_id))
+    comment = com.scalars().first()
+    if not comment:
+        raise HTTPException(404, "Comment not found")
+    return templates.TemplateResponse("edit_comment.html", {
+        "request": request,
+        "article_id": article_id,
+        "comment": comment
+    })
+
+# 댓글 수정 처리
+@app.post("/articles/{article_id}/comments/{comment_id}/edit")
+async def edit_comment(
+    article_id: str,
+    comment_id: int,
+    content: str = Form(...),
+    db: AsyncSession = Depends(get_db)
+):
+    updated = await update_comment(db, comment_id, CommentUpdate(content=content))
+    if not updated:
+        raise HTTPException(404, "Comment not found")
+    return RedirectResponse(f"/articles/{article_id}", status_code=303)
+
+# 댓글 삭제 처리
+@app.post("/articles/{article_id}/comments/{comment_id}/delete")
+async def delete_comment_endpoint(article_id: str, comment_id: int, db: AsyncSession = Depends(get_db)):
+    ok = await delete_comment(db, comment_id)
+    if not ok:
+        raise HTTPException(404, "Comment not found")
+    return RedirectResponse(f"/articles/{article_id}", status_code=303)

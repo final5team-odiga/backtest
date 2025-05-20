@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!-- <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -38,4 +38,121 @@
     </form>
     <p><a href="/articles/">목록으로</a></p>
   </body>
+</html> -->
+
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>{{ article.articleTitle }}</title>
+  </head>
+  <body>
+    <!-- ── 게시글 상세 ───────────────────────────────────────── -->
+    <h1>{{ article.articleTitle }}</h1>
+    <p><strong>Author:</strong> {{ article.articleAuthor }}</p>
+    <p><strong>Country:</strong> {{ article.travelCountry }}</p>
+    <p><strong>City:</strong> {{ article.travelCity }}</p>
+    {% if article.imageURL %}
+      <img
+        src="{{ article.imageURL }}"
+        alt="Article image"
+        style="max-width: 300px"
+      />
+    {% endif %}
+    {% if article.shareLink %}
+      <p><a href="{{ article.shareLink }}" target="_blank">공유 링크</a></p>
+    {% endif %}
+    {% if article.price %}
+      <p><strong>Price:</strong> ${{ article.price }}</p>
+    {% endif %}
+    <p>
+      <small>
+        Created at {{ article.createdAt.strftime("%Y-%m-%d %H:%M") }}
+      </small>
+    </p>
+
+    <a href="/articles/{{ article.articleID }}/edit">수정</a>
+    <form
+      action="/articles/{{ article.articleID }}/delete"
+      method="post"
+      style="display: inline"
+    >
+      <button
+        type="submit"
+        onclick="return confirm('정말 삭제하시겠습니까?');"
+      >
+        삭제
+      </button>
+    </form>
+    <p><a href="/articles/">목록으로</a></p>
+
+    <hr />
+
+    <!-- ── 댓글 섹션 ───────────────────────────────────────── -->
+    <h2 id="comments">댓글 ({{ comments|length }})</h2>
+
+    {% if comments %}
+      <ul>
+        {% for c in comments %}
+          <li style="margin-bottom: 1em;">
+            <p>
+              <strong>{{ c.commentAuthor }}</strong>
+              <em>({{ c.createdAt.strftime("%Y-%m-%d %H:%M") }})</em>
+            </p>
+            <p>{{ c.content }}</p>
+            <!-- 댓글 수정 / 삭제 -->
+            <p>
+              <a href="/articles/{{ article.articleID }}/comments/{{ c.commentID }}/edit">
+                수정
+              </a>
+              <form
+                action="/articles/{{ article.articleID }}/comments/{{ c.commentID }}/delete"
+                method="post"
+                style="display: inline;"
+              >
+                <button
+                  type="submit"
+                  onclick="return confirm('이 댓글을 삭제하시겠습니까?');"
+                >
+                  삭제
+                </button>
+              </form>
+            </p>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p>등록된 댓글이 없습니다.</p>
+    {% endif %}
+
+    <hr />
+
+    <!-- ── 새 댓글 작성 폼 ──────────────────────────────────── -->
+    <h3>새 댓글 작성</h3>
+    <form
+      action="/articles/{{ article.articleID }}/comments"
+      method="post"
+    >
+      <label>
+        Your UserID:
+        <input type="text" name="commentAuthor" required />
+      </label>
+      <br /><br />
+      <label>
+        Comment:
+        <br />
+        <textarea
+          name="content"
+          rows="4"
+          cols="50"
+          placeholder="댓글을 입력하세요"
+          required
+        ></textarea>
+      </label>
+      <br /><br />
+      <button type="submit">댓글 달기</button>
+    </form>
+  </body>
 </html>
+
