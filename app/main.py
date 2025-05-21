@@ -1,5 +1,5 @@
-from fastapi import FastAPI, Request, Form, HTTPException, Depends
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, Request, Form, HTTPException, Depends, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -9,8 +9,8 @@ import os
 from zoneinfo import ZoneInfo
 
 from app.database import get_db
-from app.models import User, Article, Comment
-from app.schemas import UserCreate, ArticleCreate, ArticleUpdate, CommentCreate, CommentUpdate
+from app.models import User, Article, Comment, Like
+from app.schemas import UserCreate, ArticleCreate, ArticleUpdate, CommentCreate, CommentUpdate, LikeCreate
 from app.crud import (
     create_article,
     update_article,
@@ -18,6 +18,8 @@ from app.crud import (
     create_comment,
     update_comment,
     delete_comment,
+    toggle_like,
+    check_user_liked,
 )
 from passlib.context import CryptContext
 
@@ -280,3 +282,49 @@ async def delete_comment_endpoint(request: Request, article_id: str, comment_id:
         return RedirectResponse(url="/login/", status_code=303)
     await delete_comment(db, comment_id)
     return RedirectResponse(url=f"/articles/{article_id}", status_code=303)
+
+
+@app.get("/articles/{article_id}", response_class=HTMLResponse)
+async def article_detail(request: Request, article_id: str, db: AsyncSession = Depends(get_db)):
+    user_id = request.session.get("user")
+    
+    result = await db.execute(select(Article).where(Article.articleID == article_id))
+    article = result.scalars().first()
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+    
+    comments_result = await db.execute(
+        select(Comment).where(Comment.articleID == article_id).order_by(Comment.createdAt.asc())
+    )
+    comments = comments_result.scalars().all()
+    
+    # Check if the logged-in user has liked this article
+    user_liked = await check_user_liked(db, article_id, user_id) if user_id else False
+    
+    return templates.TemplateResponse(
+        "article_detail.html",
+        {
+            "request": request, 
+            "article": article, 
+            "comments": comments,
+            "user_id": user_id,
+            "user_liked": user_liked
+        },
+    )
+
+# Toggle like endpoint (AJAX)
+@app.post("/articles/{article_id}/like")
+async def like_article(
+    request: Request, 
+    article_id: str, 
+    db: AsyncSession = Depends(get_db)
+):
+    user_id = request.session.get("user")
+    if not user_id:
+        return JSONResponse(
+            status_code=401,
+            content={"success": False, "message": "Login required to like articles"}
+        )
+    
+    result = await toggle_like(db, article_id, user_id)
+    return JSONResponse(content=result)

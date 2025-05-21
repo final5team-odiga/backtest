@@ -3,6 +3,34 @@
   <head>
     <meta charset="UTF-8" />
     <title>{{ article.articleTitle }}</title>
+    <style>
+      .like-button {
+        padding: 8px 16px;
+        border-radius: 4px;
+        cursor: pointer;
+        border: 1px solid #ccc;
+        margin-top: 10px;
+        margin-bottom: 10px;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }
+      
+      .like-button.liked {
+        background-color: #ffebee;
+        color: #e53935;
+        border-color: #e53935;
+      }
+      
+      .like-info {
+        margin-top: 10px;
+        margin-bottom: 10px;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        color: #666;
+      }
+    </style>
   </head>
   <body>
     {% set current_user = request.session.get('user') %}
@@ -27,9 +55,23 @@
     <p>
       <small>
         Created at {{ article.createdAt.strftime("%Y-%m-%d %H:%M") }}
-         <!-- Created at <span class="local-time" data-time="{{ article.createdAt.isoformat() }}"></span> -->
+        <!-- Created at <span class="local-time" data-time="{{ article.createdAt.isoformat() }}"></span> -->
       </small>
     </p>
+
+    <!-- 좋아요 버튼 추가 -->
+    {% if current_user %}
+      <button id="likeButton" 
+              class="like-button {% if user_liked %}liked{% endif %}"
+              data-article-id="{{ article.articleID }}">
+        <span id="likeIcon">{% if user_liked %}❤️{% else %}🤍{% endif %}</span>
+        <span id="likesCount">{{ article.likes }}</span> Likes
+      </button>
+    {% else %}
+      <div class="like-info">
+        <span>❤️</span> <span id="likesCount">{{ article.likes }}</span> Likes (로그인 후 좋아요를 누를 수 있습니다)
+      </div>
+    {% endif %}
 
     <!-- 글 수정/삭제 버튼: 로그인 & 본인 작성자인 경우에만 노출 -->
     {% if current_user and current_user == article.articleAuthor %}
@@ -119,5 +161,48 @@
     {% else %}
       <p><a href="/login/">로그인</a> 후 댓글을 작성하실 수 있습니다.</p>
     {% endif %}
+
+    <!-- 좋아요 기능 JavaScript -->
+    <script>
+      document.addEventListener('DOMContentLoaded', function() {
+        const likeButton = document.getElementById('likeButton');
+        if (likeButton) {
+          likeButton.addEventListener('click', function() {
+            const articleId = this.getAttribute('data-article-id');
+            
+            // 좋아요 요청 보내기
+            fetch(`/articles/${articleId}/like`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+            })
+            .then(response => response.json())
+            .then(data => {
+              if (data.success) {
+                // 좋아요 상태에 따라 버튼 모양 업데이트
+                if (data.liked) {
+                  likeButton.classList.add('liked');
+                  document.getElementById('likeIcon').textContent = '❤️';
+                } else {
+                  likeButton.classList.remove('liked');
+                  document.getElementById('likeIcon').textContent = '🤍';
+                }
+                
+                // 좋아요 수 업데이트
+                document.getElementById('likesCount').textContent = data.likes_count;
+              } else {
+                // 에러 처리
+                alert(data.message || '좋아요 처리 중 오류가 발생했습니다.');
+              }
+            })
+            .catch(error => {
+              console.error('Error:', error);
+              alert('좋아요 처리 중 오류가 발생했습니다.');
+            });
+          });
+        }
+      });
+    </script>
   </body>
 </html>

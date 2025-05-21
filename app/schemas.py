@@ -2,19 +2,18 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 
+# Existing schemas
 class UserCreate(BaseModel):
     userID: str
     userName: str
-    userPasswordHash: str  # 비밀번호는 해시값으로 저장
+    userPasswordHash: str
     userCountry: Optional[str] = None
     userLanguage: Optional[str] = None
-
+    
     class Config:
         orm_mode = True
 
-
 class ArticleCreate(BaseModel):
-    # articleID: str
     articleTitle: str
     articleAuthor: str
     imageURL: Optional[str] = None
@@ -22,10 +21,9 @@ class ArticleCreate(BaseModel):
     travelCity: str
     shareLink: Optional[str] = None
     price: Optional[float] = None
-
+    
     class Config:
         orm_mode = True
-
 
 class ArticleUpdate(BaseModel):
     articleTitle: Optional[str] = None
@@ -34,23 +32,28 @@ class ArticleUpdate(BaseModel):
     travelCity: Optional[str] = None
     shareLink: Optional[str] = None
     price: Optional[float] = None
-
+    
     class Config:
         orm_mode = True
 
-# comment
 class CommentCreate(BaseModel):
     articleID: str
     commentAuthor: str
     content: str
-
+    
     class Config:
-        #from_attributes = True
         orm_mode = True
 
 class CommentUpdate(BaseModel):
     content: str
-
+    
     class Config:
-        #from_attributes = True
-        orm_mode=True
+        orm_mode = True
+
+# New schema for Like
+class LikeCreate(BaseModel):
+    articleID: str
+    userID: str
+    
+    class Config:
+        orm_mode = True
