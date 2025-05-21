@@ -1,10 +1,11 @@
-fastapi                          # 웹 프레임워크
-uvicorn[standard]                # ASGI 서버(리로드, 로깅 포함)
-SQLAlchemy                       # ORM
-asyncpg                          # PostgreSQL Async 드라이버
-pydantic                         # 데이터 검증
-Jinja2                           # 템플릿 렌더링
-python-dotenv                    # .env 설정 로드
-passlib[bcrypt]                  # 비밀번호 해싱
+fastapi
+uvicorn[standard]
+jinja2
+python-dotenv
+passlib[bcrypt]
+sqlalchemy[asyncio]
+asyncpg
 python-multipart
-
+aiofiles
+email-validator
+itsdangerous

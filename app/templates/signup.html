@@ -7,6 +7,11 @@
   </head>
   <body>
     <h1>회원 가입</h1>
+
+    {% if error %}
+    <p style="color: red">{{ error }}</p>
+    {% endif %}
+
     <form action="/signup/" method="post">
       <label for="userID">UserID:</label>
       <input type="text" id="userID" name="userID" required /><br /><br />
@@ -14,11 +19,11 @@
       <label for="userName">User Name:</label>
       <input type="text" id="userName" name="userName" required /><br /><br />
 
-      <label for="userPasswordHash">Password:</label>
+      <label for="password">Password:</label>
       <input
         type="password"
-        id="userPasswordHash"
-        name="userPasswordHash"
+        id="password"
+        name="password"
         required
       /><br /><br />
 
@@ -40,5 +45,10 @@
 
       <input type="submit" value="회원 가입" />
     </form>
+
+    <p>
+      이미 계정이 있으신가요?
+      <a href="/login/">로그인</a>
+    </p>
   </body>
 </html>

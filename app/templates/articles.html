@@ -2,19 +2,33 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Articles</title>
   </head>
   <body>
+    <!-- 네비게이션 바 -->
+    <nav style="margin-bottom: 1em">
+      {% set current_user = request.session.get('user') %} {% if current_user %}
+      <span>안녕하세요, {{ current_user }}님</span>
+      | <a href="/create_article/">새 글 작성</a> |
+      <a href="/logout/">로그아웃</a>
+      {% else %}
+      <a href="/login/">로그인</a>
+      | <a href="/signup/">회원가입</a>
+      {% endif %}
+    </nav>
+
+    <!-- 기사 목록 헤더 -->
     <h1>All Articles</h1>
-    <a href="/create_article/">새 글 작성</a>
+
+    <!-- 게시글 리스트 -->
     <ul>
       {% for art in articles %}
       <li>
         <a href="/articles/{{ art.articleID }}">{{ art.articleTitle }}</a>
-        <small
-          >by {{ art.articleAuthor }} ({{ art.createdAt.strftime("%Y-%m-%d")
-          }})</small
-        >
+        <small>
+          by {{ art.articleAuthor }} ({{ art.createdAt.strftime("%Y-%m-%d") }})
+        </small>
       </li>
       {% else %}
       <li>등록된 글이 없습니다.</li>
