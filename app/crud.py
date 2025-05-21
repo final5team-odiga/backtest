@@ -69,7 +69,8 @@ async def update_article(db: AsyncSession, article_id: str, article: ArticleUpda
         return None
 
     # 2) 전달된 변경값만 덮어쓰기
-    update_data = article.dict(exclude_unset=True)
+    #update_data = article.dict(exclude_unset=True)
+    update_data = article.dict(exclude_unset=True, exclude_none=True)
     for key, value in update_data.items():
         setattr(db_article, key, value)
 

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>게시글 수정 - {{ article.articleTitle }}</title>
+  </head>
+  <body>
+    <!-- ── 게시글 수정 ───────────────────────────────────────── -->
+    <h1>게시글 수정하기</h1>
+    <form action="" method="post">
+      <div>
+        <label for="articleTitle">제목</label><br />
+        <input
+          id="articleTitle"
+          name="articleTitle"
+          type="text"
+          value="{{ article.articleTitle }}"
+          required
+        />
+      </div>
+      <div>
+        <label for="imageURL">이미지 URL</label><br />
+        <input
+          id="imageURL"
+          name="imageURL"
+          type="url"
+          value="{{ article.imageURL or '' }}"
+        />
+      </div>
+      <div>
+        <label for="travelCountry">여행 국가</label><br />
+        <input
+          id="travelCountry"
+          name="travelCountry"
+          type="text"
+          value="{{ article.travelCountry }}"
+          required
+        />
+      </div>
+      <div>
+        <label for="travelCity">여행 도시</label><br />
+        <input
+          id="travelCity"
+          name="travelCity"
+          type="text"
+          value="{{ article.travelCity }}"
+          required
+        />
+      </div>
+      <div>
+        <label for="shareLink">공유 링크</label><br />
+        <input
+          id="shareLink"
+          name="shareLink"
+          type="url"
+          value="{{ article.shareLink or '' }}"
+        />
+      </div>
+      <div>
+        <label for="price">가격</label><br />
+        <input
+          id="price"
+          name="price"
+          type="number"
+          step="0.01"
+          value="{{ article.price or '' }}"
+        />
+      </div>
+      <div>
+        <button type="submit">저장하기</button>
+        <a href="/articles/{{ article.articleID }}">취소</a>
+      </div>
+    </form>
+  </body>
+</html>

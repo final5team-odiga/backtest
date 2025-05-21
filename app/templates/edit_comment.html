@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>댓글 수정 - {{ article_id }}</title>
+  </head>
+  <body>
+    <!-- ── 댓글 수정 ───────────────────────────────────────── -->
+    <h1>댓글 수정하기</h1>
+    <form action="" method="post">
+      <div>
+        <label for="content">댓글 내용</label><br />
+        <textarea id="content" name="content" rows="4" cols="50">
+{{ comment.content }}</textarea
+        >
+      </div>
+      <div>
+        <button type="submit">저장하기</button>
+        <a href="/articles/{{ article_id }}">취소</a>
+      </div>
+    </form>
+  </body>
+</html>

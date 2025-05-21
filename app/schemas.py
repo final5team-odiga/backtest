@@ -45,10 +45,12 @@ class CommentCreate(BaseModel):
     content: str
 
     class Config:
-        from_attributes = True
+        #from_attributes = True
+        orm_mode = True
 
 class CommentUpdate(BaseModel):
     content: str
 
     class Config:
-        from_attributes = True
+        #from_attributes = True
+        orm_mode=True
