@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <title>회원 탈퇴</title>
+  </head>
+  <body>
+    <!-- 네비게이션 바 (기존과 동일) -->
+    <nav>
+      {% set current_user = request.session.get('user') %} {% if current_user %}
+      <span>안녕하세요, {{ current_user }}님</span>
+      | <a href="/articles/">전체 글</a> | <a href="/mypage/">내 글 보기</a> |
+      <a href="/logout/">로그아웃</a>
+      {% else %}
+      <a href="/login/">로그인</a>
+      | <a href="/signup/">회원가입</a>
+      {% endif %}
+    </nav>
+
+    <h1>회원 탈퇴</h1>
+    <p>정말로 회원 탈퇴를 진행하시겠습니까? 이 작업은 되돌릴 수 없습니다.</p>
+
+    <form action="/delete_account/" method="post">
+      <button type="submit" onclick="return confirm('정말 탈퇴하시겠습니까?');">
+        탈퇴하기
+      </button>
+      <a href="/mypage/">취소</a>
+    </form>
+  </body>
+</html>

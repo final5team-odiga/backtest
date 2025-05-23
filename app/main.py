@@ -7,6 +7,8 @@ from starlette.middleware.sessions import SessionMiddleware
 from dotenv import load_dotenv
 import os
 from zoneinfo import ZoneInfo
+from sqlalchemy import delete
+
 
 from app.database import get_db
 from app.models import User, Article, Comment, Like
@@ -328,3 +330,137 @@ async def like_article(
     
     result = await toggle_like(db, article_id, user_id)
     return JSONResponse(content=result)
+
+
+# ── 마이페이지 ─────────────────────────────────────────
+@app.get("/mypage/", response_class=HTMLResponse)
+async def mypage(request: Request, db: AsyncSession = Depends(get_db)):
+    user_id = request.session.get("user")
+    if not user_id:
+        return RedirectResponse(url="/login/", status_code=303)
+
+    # 본인이 쓴 글만 조회
+    result = await db.execute(
+        select(Article)
+        .where(Article.articleAuthor == user_id)
+        .order_by(Article.createdAt.desc())
+    )
+    my_articles = result.scalars().all()
+
+    return templates.TemplateResponse(
+        "mypage.html",
+        {
+            "request": request,
+            "user_id": user_id,
+            "articles": my_articles,
+        },
+    )
+
+
+# ── 회원 탈퇴 ─────────────────────────────────────────
+@app.get("/delete_account/", response_class=HTMLResponse)
+async def confirm_delete_account(request: Request):
+    user_id = request.session.get("user")
+    if not user_id:
+        return RedirectResponse(url="/login/", status_code=303)
+    # 확인 페이지 렌더링
+    return templates.TemplateResponse("delete_account.html", {"request": request})
+
+
+@app.post("/delete_account/")
+async def delete_account(request: Request, db: AsyncSession = Depends(get_db)):
+    user_id = request.session.get("user")
+    if not user_id:
+        return RedirectResponse(url="/login/", status_code=303)
+
+    # 1) 댓글 삭제
+    await db.execute(delete(Comment).where(Comment.commentAuthor == user_id))
+    # 2) 좋아요 삭제
+    await db.execute(delete(Like).where(Like.userID == user_id))
+    # 3) 게시글 삭제
+    await db.execute(delete(Article).where(Article.articleAuthor == user_id))
+    # 4) 회원 삭제
+    await db.execute(delete(User).where(User.userID == user_id))
+
+    await db.commit()
+    # 세션 비우기
+    request.session.clear()
+
+    # 탈퇴 후 Articles 목록을 바로 렌더링
+    result = await db.execute(
+        select(Article).order_by(Article.createdAt.desc())
+    )
+    articles = result.scalars().all()
+    return templates.TemplateResponse(
+        "articles.html",
+        { "request": request, "articles": articles }
+    )
+
+
+from sqlalchemy import update
+# … 기존 import 유지
+
+# ── 회원 정보 수정 폼 ─────────────────────────────────────
+@app.get("/profile/edit/", response_class=HTMLResponse)
+async def edit_profile_form(request: Request, db: AsyncSession = Depends(get_db)):
+    user_id = request.session.get("user")
+    if not user_id:
+        return RedirectResponse("/login/", status_code=303)
+
+    result = await db.execute(select(User).where(User.userID == user_id))
+    user = result.scalars().first()
+    if not user:
+        # 세션에 남아있는 user가 DB에 없다면 로그아웃 시키고 로그인 페이지로
+        request.session.clear()
+        return RedirectResponse("/login/", status_code=303)
+
+    return templates.TemplateResponse(
+        "edit_profile.html",
+        {
+            "request": request,
+            "user": user
+        },
+    )
+
+# ── 회원 정보 수정 처리 ────────────────────────────────────
+@app.post("/profile/edit/")
+async def edit_profile(
+    request: Request,
+    userName: str = Form(...),
+    userCountry: str = Form(None),
+    userLanguage: str = Form(None),
+    password: str = Form(None),
+    db: AsyncSession = Depends(get_db),
+):
+    user_id = request.session.get("user")
+    if not user_id:
+        return RedirectResponse("/login/", status_code=303)
+
+    # DB에서 사용자 로드
+    result = await db.execute(select(User).where(User.userID == user_id))
+    user = result.scalars().first()
+    if not user:
+        request.session.clear()
+        return RedirectResponse("/login/", status_code=303)
+
+    # 업데이트할 필드 준비
+    update_data = {
+        "userName": userName,
+        "userCountry": userCountry,
+        "userLanguage": userLanguage,
+    }
+    if password:
+        # 비밀번호가 비어있지 않다면 해싱해서 저장
+        hashed_pw = pwd_context.hash(password)
+        update_data["userPasswordHash"] = hashed_pw
+
+    # 실제 업데이트 실행
+    await db.execute(
+        update(User)
+        .where(User.userID == user_id)
+        .values(**update_data)
+    )
+    await db.commit()
+
+    # 수정 후 마이페이지나 프로필 보기 페이지로 리다이렉트
+    return RedirectResponse(url="/mypage/", status_code=303)

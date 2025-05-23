@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <title>회원 정보 수정</title>
+  </head>
+  <body>
+    <!-- 네비게이션 바 -->
+    <nav style="margin-bottom: 1em">
+      {% set current_user = request.session.get('user') %} {% if current_user %}
+      <span>안녕하세요, {{ current_user }}님</span>
+      | <a href="/articles/">전체 글</a> | <a href="/mypage/">내 글 보기</a> |
+      <a href="/logout/">로그아웃</a>
+      {% else %}
+      <a href="/login/">로그인</a>
+      | <a href="/signup/">회원가입</a>
+      {% endif %}
+    </nav>
+
+    <h1>회원 정보 수정</h1>
+    <form action="/profile/edit/" method="post">
+      <!-- 읽기 전용 아이디 -->
+      <p>
+        <label>UserID: </label>
+        <input type="text" name="userID" value="{{ user.userID }}" readonly />
+      </p>
+      <p>
+        <label>User Name: </label>
+        <input
+          type="text"
+          name="userName"
+          value="{{ user.userName }}"
+          required
+        />
+      </p>
+      <p>
+        <label>Country: </label>
+        <input
+          type="text"
+          name="userCountry"
+          value="{{ user.userCountry or '' }}"
+        />
+      </p>
+      <p>
+        <label>Language: </label>
+        <input
+          type="text"
+          name="userLanguage"
+          value="{{ user.userLanguage or '' }}"
+        />
+      </p>
+      <p>
+        <label>New Password: </label>
+        <input
+          type="password"
+          name="password"
+          placeholder="변경할 비밀번호(입력 시만 변경)"
+        />
+      </p>
+      <button type="submit">수정하기</button>
+      <a href="/mypage/">취소</a>
+    </form>
+  </body>
+</html>
