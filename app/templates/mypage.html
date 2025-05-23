@@ -18,8 +18,24 @@
       | <a href="/signup/">회원가입</a>
       {% endif %}
     </nav>
+    <h1>내 프로필</h1>
+    {% if user.profileImage %}
+    <img
+      src="{{ user.profileImage }}"
+      alt="프로필 사진"
+      style="width: 150px; height: 150px; object-fit: cover; border-radius: 50%"
+    />
+    {% else %}
+    <p>프로필 사진이 없습니다.</p>
+    {% endif %}
+    <ul>
+      <li>UserID: {{ user.userID }}</li>
+      <li>Name: {{ user.userName }}</li>
+      <li>Country: {{ user.userCountry }}</li>
+      <li>Language: {{ user.userLanguage }}</li>
+    </ul>
 
-    <h1>내가 쓴 글</h1>
+    <h2>내가 쓴 글</h2>
     {% if articles %}
     <ul>
       {% for art in articles %}

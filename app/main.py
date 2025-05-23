@@ -1,6 +1,7 @@
-from fastapi import FastAPI, Request, Form, HTTPException, Depends, Response
+from fastapi import FastAPI, Request, Form, HTTPException, Depends, Response, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from starlette.middleware.sessions import SessionMiddleware
@@ -333,25 +334,53 @@ async def like_article(
 
 
 # ── 마이페이지 ─────────────────────────────────────────
+# @app.get("/mypage/", response_class=HTMLResponse)
+# async def mypage(request: Request, db: AsyncSession = Depends(get_db)):
+#     user_id = request.session.get("user")
+#     if not user_id:
+#         return RedirectResponse(url="/login/", status_code=303)
+
+#     # 본인이 쓴 글만 조회
+#     result = await db.execute(
+#         select(Article)
+#         .where(Article.articleAuthor == user_id)
+#         .order_by(Article.createdAt.desc())
+#     )
+#     my_articles = result.scalars().all()
+
+#     return templates.TemplateResponse(
+#         "mypage.html",
+#         {
+#             "request": request,
+#             "user_id": user_id,
+#             "articles": my_articles,
+#         },
+#     )
+
 @app.get("/mypage/", response_class=HTMLResponse)
 async def mypage(request: Request, db: AsyncSession = Depends(get_db)):
     user_id = request.session.get("user")
     if not user_id:
         return RedirectResponse(url="/login/", status_code=303)
 
-    # 본인이 쓴 글만 조회
-    result = await db.execute(
+    # 1) 사용자 정보 로드
+    result_user = await db.execute(select(User).where(User.userID == user_id))
+    user = result_user.scalars().first()
+
+    # 2) 본인이 쓴 글 로드
+    result_articles = await db.execute(
         select(Article)
         .where(Article.articleAuthor == user_id)
         .order_by(Article.createdAt.desc())
     )
-    my_articles = result.scalars().all()
+    my_articles = result_articles.scalars().all()
 
+    # 3) 템플릿에 both user and articles 전달
     return templates.TemplateResponse(
         "mypage.html",
         {
             "request": request,
-            "user_id": user_id,
+            "user": user,             # ← user 추가
             "articles": my_articles,
         },
     )
@@ -423,10 +452,66 @@ async def edit_profile_form(request: Request, db: AsyncSession = Depends(get_db)
     )
 
 # ── 회원 정보 수정 처리 ────────────────────────────────────
+# @app.post("/profile/edit/")
+# async def edit_profile(
+#     request: Request,
+#     userName: str = Form(...),
+#     profile_image: UploadFile = File(None),
+#     userCountry: str = Form(None),
+#     userLanguage: str = Form(None),
+#     password: str = Form(None),
+#     db: AsyncSession = Depends(get_db),
+# ):
+#     user_id = request.session.get("user")
+#     if not user_id:
+#         return RedirectResponse("/login/", status_code=303)
+    
+#     # ▶️ 디버그 로그
+#     print("profile_image object:", profile_image)
+#     if profile_image:
+#         print("filename:", profile_image.filename)
+#         content = await profile_image.read()
+#         print("content size:", len(content))
+#     else:
+#         print("no file uploaded")
+
+#     # DB에서 사용자 로드
+#     result = await db.execute(select(User).where(User.userID == user_id))
+#     user = result.scalars().first()
+#     if not user:
+#         request.session.clear()
+#         return RedirectResponse("/login/", status_code=303)
+
+#     # 업데이트할 필드 준비
+#     update_data = {
+#         "userName": userName,
+#         "userCountry": userCountry,
+#         "userLanguage": userLanguage,
+#     }
+#     if password:
+#         # 비밀번호가 비어있지 않다면 해싱해서 저장
+#         hashed_pw = pwd_context.hash(password)
+#         update_data["userPasswordHash"] = hashed_pw
+
+#     # 실제 업데이트 실행
+#     await db.execute(
+#         update(User)
+#         .where(User.userID == user_id)
+#         .values(**update_data)
+#     )
+#     await db.commit()
+
+#     # 수정 후 마이페이지나 프로필 보기 페이지로 리다이렉트
+#     return RedirectResponse(url="/mypage/", status_code=303)
+
+from fastapi import UploadFile, File, Form
+from sqlalchemy import update
+
 @app.post("/profile/edit/")
 async def edit_profile(
     request: Request,
     userName: str = Form(...),
+    profile_image: UploadFile = File(None),
     userCountry: str = Form(None),
     userLanguage: str = Form(None),
     password: str = Form(None),
@@ -436,25 +521,32 @@ async def edit_profile(
     if not user_id:
         return RedirectResponse("/login/", status_code=303)
 
-    # DB에서 사용자 로드
+    # 1) 사용자 로드
     result = await db.execute(select(User).where(User.userID == user_id))
     user = result.scalars().first()
-    if not user:
-        request.session.clear()
-        return RedirectResponse("/login/", status_code=303)
 
-    # 업데이트할 필드 준비
+    # 2) 업데이트 데이터 준비
     update_data = {
         "userName": userName,
         "userCountry": userCountry,
         "userLanguage": userLanguage,
     }
     if password:
-        # 비밀번호가 비어있지 않다면 해싱해서 저장
-        hashed_pw = pwd_context.hash(password)
-        update_data["userPasswordHash"] = hashed_pw
+        update_data["userPasswordHash"] = pwd_context.hash(password)
 
-    # 실제 업데이트 실행
+    # 3) 파일 저장 & 경로 추가
+    if profile_image:
+        ext = os.path.splitext(profile_image.filename)[1]
+        save_dir = "static/profiles"
+        os.makedirs(save_dir, exist_ok=True)
+        save_path = f"{save_dir}/{user_id}{ext}"
+        content = await profile_image.read()
+        with open(save_path, "wb") as f:
+            f.write(content)
+        # DB에 저장할 경로
+        update_data["profileImage"] = f"/static/profiles/{user_id}{ext}"
+
+    # 4) 한 번에 업데이트 실행
     await db.execute(
         update(User)
         .where(User.userID == user_id)
@@ -462,5 +554,58 @@ async def edit_profile(
     )
     await db.commit()
 
-    # 수정 후 마이페이지나 프로필 보기 페이지로 리다이렉트
+    return RedirectResponse(url="/mypage/", status_code=303)
+
+
+####### 프로필 이미지 설정 ###########3
+if not os.path.isdir("static"):
+    os.makedirs("static/profiles", exist_ok=True)
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+@app.post("/profile/edit/")
+async def edit_profile(
+    request: Request,
+    userName: str = Form(...),
+    userCountry: str = Form(None),
+    userLanguage: str = Form(None),
+    password: str = Form(None),
+    profile_image: UploadFile = File(None),      # <- 여기에 추가
+    db: AsyncSession = Depends(get_db),
+):
+    user_id = request.session.get("user")
+    if not user_id:
+        return RedirectResponse("/login/", status_code=303)
+
+    # 1) DB에서 사용자 로드
+    result = await db.execute(select(User).where(User.userID == user_id))
+    user = result.scalars().first()
+
+    # 2) 업데이트 필드 준비
+    update_data = {
+        "userName": userName,
+        "userCountry": userCountry,
+        "userLanguage": userLanguage,
+    }
+    if password:
+        update_data["userPasswordHash"] = pwd_context.hash(password)
+
+    # 3) 파일 저장 & 경로 업데이트
+    if profile_image:
+        # 확장자 추출
+        ext = os.path.splitext(profile_image.filename)[1]
+        # 저장 경로 결정
+        save_path = f"static/profiles/{user_id}{ext}"
+        # 실제 파일 쓰기
+        with open(save_path, "wb") as f:
+            content = await profile_image.read()
+            f.write(content)
+        # DB에 저장할 URL 경로
+        update_data["profileImage"] = f"/static/profiles/{user_id}{ext}"
+
+    # 4) DB 업데이트
+    await db.execute(update(User).where(User.userID == user_id).values(**update_data))
+    await db.commit()
+
     return RedirectResponse(url="/mypage/", status_code=303)

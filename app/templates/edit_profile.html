@@ -5,7 +5,6 @@
     <title>회원 정보 수정</title>
   </head>
   <body>
-    <!-- 네비게이션 바 -->
     <nav style="margin-bottom: 1em">
       {% set current_user = request.session.get('user') %} {% if current_user %}
       <span>안녕하세요, {{ current_user }}님</span>
@@ -18,14 +17,25 @@
     </nav>
 
     <h1>회원 정보 수정</h1>
-    <form action="/profile/edit/" method="post">
-      <!-- 읽기 전용 아이디 -->
+    <form action="/profile/edit/" method="post" enctype="multipart/form-data">
+      <!-- 1) Profile Image -->
       <p>
-        <label>UserID: </label>
+        <label for="profile_image">Profile Image:</label>
+        <input
+          type="file"
+          id="profile_image"
+          name="profile_image"
+          accept="image/*"
+        />
+      </p>
+
+      <!-- 2) User Info -->
+      <p>
+        <label>UserID:</label>
         <input type="text" name="userID" value="{{ user.userID }}" readonly />
       </p>
       <p>
-        <label>User Name: </label>
+        <label>User Name:</label>
         <input
           type="text"
           name="userName"
@@ -34,7 +44,7 @@
         />
       </p>
       <p>
-        <label>Country: </label>
+        <label>Country:</label>
         <input
           type="text"
           name="userCountry"
@@ -42,7 +52,7 @@
         />
       </p>
       <p>
-        <label>Language: </label>
+        <label>Language:</label>
         <input
           type="text"
           name="userLanguage"
@@ -50,13 +60,15 @@
         />
       </p>
       <p>
-        <label>New Password: </label>
+        <label>New Password:</label>
         <input
           type="password"
           name="password"
           placeholder="변경할 비밀번호(입력 시만 변경)"
         />
       </p>
+
+      <!-- 3) Submit 버튼은 폼 마지막에 단 한 번 -->
       <button type="submit">수정하기</button>
       <a href="/mypage/">취소</a>
     </form>
