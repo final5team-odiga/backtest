@@ -9,6 +9,7 @@ class User(Base):
     
     userID = Column(String, primary_key=True, index=True)
     userName = Column(String, nullable=False)
+    userEmail = Column(String, nullable=False, unique=True)
     userPasswordHash = Column(String, nullable=False)
     userCountry = Column(String)
     userLanguage = Column(String)

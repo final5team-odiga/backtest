@@ -8,13 +8,16 @@ from starlette.middleware.sessions import SessionMiddleware
 from dotenv import load_dotenv
 import os
 from zoneinfo import ZoneInfo
-from sqlalchemy import delete
+from sqlalchemy import delete, update
+from pydantic import EmailStr
+from sqlalchemy.exc import IntegrityError
 
 
 from app.database import get_db
 from app.models import User, Article, Comment, Like
 from app.schemas import UserCreate, ArticleCreate, ArticleUpdate, CommentCreate, CommentUpdate, LikeCreate
 from app.crud import (
+    create_user,
     create_article,
     update_article,
     delete_article,
@@ -60,17 +63,72 @@ async def get_current_user(request: Request):
 async def signup_form(request: Request):
     return templates.TemplateResponse("signup.html", {"request": request})
 
+# @app.post("/signup/")
+# async def signup(
+#     request: Request,
+#     userID: str = Form(...),
+#     userName: str = Form(...),
+#     password: str = Form(...),
+#     userEmail: EmailStr = Form(...),
+#     userCountry: str = Form(...),
+#     userLanguage: str = Form(...),
+#     db: AsyncSession = Depends(get_db),
+# ):
+#     # 중복 확인
+#     # result = await db.execute(select(User).where(User.userID == userID))
+#     # if result.scalar_one_or_none():
+#     #     return templates.TemplateResponse(
+#     #         "signup.html",
+#     #         {"request": request, "error": "이미 존재하는 사용자입니다."},
+#     #         status_code=400,
+#     #     )
+
+#     try:
+#         new = await create_user(db, user_in)
+#     except IntegrityError:
+#         return templates.TemplateResponse(
+#             "signup.html",
+#             {"request": request, "error": "이미 존재하는 ID 또는 이메일입니다."},
+#             status_code=400,
+#         )
+#     return RedirectResponse(url="/login/", status_code=303)
+
+
+#     # 비밀번호 해싱
+#     hashed_pw = pwd_context.hash(password)
+#     user_in = UserCreate(
+#         userID=userID,
+#         userName=userName,
+#         userPasswordHash=hashed_pw,
+#         userEmail=userEmail,
+#         userCountry=userCountry,
+#         userLanguage=userLanguage,
+#     )
+#     # 직접 User 모델 생성
+#     db_user = User(
+#         userID=user_in.userID,
+#         userName=user_in.userName,
+#         userPasswordHash=user_in.userPasswordHash,
+#         userEmail=user_in.userEmail,
+#         userCountry=user_in.userCountry,
+#         userLanguage=user_in.userLanguage,
+#     )
+#     db.add(db_user)
+#     await db.commit()
+#     await db.refresh(db_user)
+#     return RedirectResponse(url="/login/", status_code=303)
 @app.post("/signup/")
 async def signup(
     request: Request,
-    userID: str = Form(...),
-    userName: str = Form(...),
-    password: str = Form(...),
-    userCountry: str = Form(...),
-    userLanguage: str = Form(...),
-    db: AsyncSession = Depends(get_db),
+    userID:       str      = Form(...),
+    userName:     str      = Form(...),
+    password:     str      = Form(...),
+    userEmail:    EmailStr = Form(...),
+    userCountry:  str      = Form(...),
+    userLanguage: str      = Form(...),
+    db:           AsyncSession = Depends(get_db),
 ):
-    # 중복 확인
+    # 1) (선택) ID 중복 확인
     result = await db.execute(select(User).where(User.userID == userID))
     if result.scalar_one_or_none():
         return templates.TemplateResponse(
@@ -78,26 +136,29 @@ async def signup(
             {"request": request, "error": "이미 존재하는 사용자입니다."},
             status_code=400,
         )
-    # 비밀번호 해싱
+
+    # 2) Pydantic 객체 & 해시 비밀번호 준비
     hashed_pw = pwd_context.hash(password)
     user_in = UserCreate(
         userID=userID,
         userName=userName,
-        userPasswordHash=hashed_pw,
+        userPasswordHash=password,
+        userEmail=userEmail,
         userCountry=userCountry,
         userLanguage=userLanguage,
     )
-    # 직접 User 모델 생성
-    db_user = User(
-        userID=user_in.userID,
-        userName=user_in.userName,
-        userPasswordHash=user_in.userPasswordHash,
-        userCountry=user_in.userCountry,
-        userLanguage=user_in.userLanguage,
-    )
-    db.add(db_user)
-    await db.commit()
-    await db.refresh(db_user)
+
+    # 3) DB 저장 시도 (ID 또는 EMAIL 중복시 IntegrityError 핸들링)
+    try:
+        new_user = await create_user(db, user_in)
+    except IntegrityError:
+        return templates.TemplateResponse(
+            "signup.html",
+            {"request": request, "error": "이미 존재하는 ID 또는 이메일입니다."},
+            status_code=400,
+        )
+
+    # 4) 성공하면 로그인 페이지로 리다이렉트
     return RedirectResponse(url="/login/", status_code=303)
 
 # 로그인
@@ -426,7 +487,6 @@ async def delete_account(request: Request, db: AsyncSession = Depends(get_db)):
     )
 
 
-from sqlalchemy import update
 # … 기존 import 유지
 
 # ── 회원 정보 수정 폼 ─────────────────────────────────────
@@ -504,14 +564,12 @@ async def edit_profile_form(request: Request, db: AsyncSession = Depends(get_db)
 #     # 수정 후 마이페이지나 프로필 보기 페이지로 리다이렉트
 #     return RedirectResponse(url="/mypage/", status_code=303)
 
-from fastapi import UploadFile, File, Form
-from sqlalchemy import update
-
 @app.post("/profile/edit/")
 async def edit_profile(
     request: Request,
     userName: str = Form(...),
     profile_image: UploadFile = File(None),
+    userEmail: str = Form(...),
     userCountry: str = Form(None),
     userLanguage: str = Form(None),
     password: str = Form(None),
@@ -528,11 +586,15 @@ async def edit_profile(
     # 2) 업데이트 데이터 준비
     update_data = {
         "userName": userName,
+        "userEmail": userEmail,
         "userCountry": userCountry,
         "userLanguage": userLanguage,
     }
     if password:
         update_data["userPasswordHash"] = pwd_context.hash(password)
+
+    if userEmail:
+        update_data["userEmail"] = userEmail
 
     # 3) 파일 저장 & 경로 추가
     if profile_image:
@@ -568,6 +630,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 async def edit_profile(
     request: Request,
     userName: str = Form(...),
+    userEmail: str = Form(...),
     userCountry: str = Form(None),
     userLanguage: str = Form(None),
     password: str = Form(None),
@@ -585,6 +648,7 @@ async def edit_profile(
     # 2) 업데이트 필드 준비
     update_data = {
         "userName": userName,
+        "userEmail":userEmail,
         "userCountry": userCountry,
         "userLanguage": userLanguage,
     }

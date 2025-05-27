@@ -9,3 +9,4 @@ python-multipart
 aiofiles
 email-validator
 itsdangerous
+#pydantic
