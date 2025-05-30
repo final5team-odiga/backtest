@@ -1,4 +1,9 @@
-from fastapi import FastAPI, Request, Form, HTTPException, Depends, Response, UploadFile, File
+import os
+import shutil
+import uuid
+import logging
+import tempfile
+from fastapi import FastAPI, Request, Form, HTTPException, Depends, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
@@ -6,42 +11,62 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from starlette.middleware.sessions import SessionMiddleware
 from dotenv import load_dotenv
-import os
 from zoneinfo import ZoneInfo
 from sqlalchemy import delete, update
 from pydantic import EmailStr
 from sqlalchemy.exc import IntegrityError
 
-
 from app.database import get_db, create_tables
 from app.models import User, Article, Comment, Like
-from app.schemas import UserCreate, ArticleCreate, ArticleUpdate, CommentCreate, CommentUpdate, LikeCreate
-from app.crud import (
-    create_user,
-    create_article,
-    update_article,
-    delete_article,
-    create_comment,
-    update_comment,
-    delete_comment,
-    toggle_like,
-    check_user_liked,
+from app.schemas import (
+    UserCreate, ArticleCreate, ArticleUpdate,
+    CommentCreate, CommentUpdate, LikeCreate
 )
+from app.crud import (
+    create_user, create_article, update_article, delete_article,
+    create_comment, update_comment, delete_comment,
+    toggle_like, check_user_liked
+)
+from app.stt import transcribe_audio  # STT 모듈 임포트
 from passlib.context import CryptContext
 
 # 비밀번호 해싱 설정
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-app = FastAPI()
+# .env 로드 및 환경변수
+load_dotenv()
+SPEECH_SERVICE_KEY = os.getenv("SPEECH_SERVICE_KEY")
+SPEECH_REGION      = os.getenv("SPEECH_REGION")
+SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY")
+
+app = FastAPI(title="CRUD & STT Web App")
+
+#app = FastAPI()
 
 # Jinja2 템플릿 설정
 templates = Jinja2Templates(directory="app/templates")
 
-# ② startup 이벤트에 테이블 생성 로직 등록
+# 세션 미들웨어 설정
+app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET_KEY)
+
+# # ② startup 이벤트에 테이블 생성 로직 등록
+# @app.on_event("startup")
+# async def on_startup():
+#     # create_tables() 내부에서 Base.metadata.create_all() 을 실행합니다.
+#     await create_tables()
+
+# Static 파일 경로
+if not os.path.isdir("static"): os.makedirs("static/profiles", exist_ok=True)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Database 테이블 생성
 @app.on_event("startup")
 async def on_startup():
-    # create_tables() 내부에서 Base.metadata.create_all() 을 실행합니다.
     await create_tables()
+
+# 현재 로그인된 사용자 체크
+async def get_current_user(request: Request):
+    return request.session.get("user")
 
 
 # 일단 시작페이지 articles로 리다이렉트
@@ -55,7 +80,7 @@ async def home(request: Request):
 
 # 세션 미들웨어 설정
 load_dotenv()
-app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET_KEY"))
+#app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET_KEY"))
 
 # 현재 로그인된 사용자 체크
 async def get_current_user(request: Request):
@@ -679,3 +704,91 @@ async def edit_profile(
     await db.commit()
 
     return RedirectResponse(url="/mypage/", status_code=303)
+
+
+###########STT############
+
+# 로깅 설정
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# STT 엔드포인트 수정
+@app.post("/transcribe")
+async def transcribe(
+    request: Request,
+    audio_file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db)
+):
+    try:
+        # 로그인 체크 (선택사항)
+        user_id = request.session.get("user")
+        if not user_id:
+            return JSONResponse(
+                status_code=401,
+                content={"success": False, "message": "Login required"}
+            )
+        
+        # 파일 확장자 체크
+        if not audio_file.filename:
+            raise HTTPException(status_code=400, detail="No file uploaded")
+            
+        file_ext = os.path.splitext(audio_file.filename)[1].lower()
+        if file_ext not in ['.wav', '.mp3', '.ogg', '.flac', '.m4a', '.aac']:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Unsupported audio format: {file_ext}"
+            )
+        
+        # 임시 파일로 저장
+        with tempfile.NamedTemporaryFile(suffix=file_ext, delete=False) as temp_file:
+            content = await audio_file.read()
+            temp_file.write(content)
+            temp_path = temp_file.name
+        
+        try:
+            # STT 처리
+            result = transcribe_audio(
+                filepath=temp_path,
+                key=SPEECH_SERVICE_KEY,
+                region=SPEECH_REGION
+            )
+            
+            return JSONResponse(content={
+                "success": True,
+                "detected_language": result.get("detected_language"),
+                "transcription": result.get("transcription", "")
+            })
+            
+        finally:
+            # 임시 파일 삭제
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+    
+    except FileNotFoundError as e:
+        logger.error(f"File not found error: {e}")
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "message": f"Audio file not found: {str(e)}"}
+        )
+    
+    except ValueError as e:
+        logger.error(f"Unsupported format error: {e}")
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "message": str(e)}
+        )
+    
+    except Exception as e:
+        logger.error(f"Transcription error: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "message": f"Transcription failed: {str(e)}"}
+        )
+
+# STT UI 페이지 (녹음 버튼)
+@app.get("/transcribe", response_class=HTMLResponse)
+async def transcribe_page(request: Request):
+    user_id = request.session.get("user")
+    if not user_id:
+        return RedirectResponse(url="/login/", status_code=303)
+    return templates.TemplateResponse("transcribe.html", {"request": request})
