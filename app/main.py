@@ -13,7 +13,7 @@ from pydantic import EmailStr
 from sqlalchemy.exc import IntegrityError
 
 
-from app.database import get_db
+from app.database import get_db, create_tables
 from app.models import User, Article, Comment, Like
 from app.schemas import UserCreate, ArticleCreate, ArticleUpdate, CommentCreate, CommentUpdate, LikeCreate
 from app.crud import (
@@ -36,6 +36,12 @@ app = FastAPI()
 
 # Jinja2 템플릿 설정
 templates = Jinja2Templates(directory="app/templates")
+
+# ② startup 이벤트에 테이블 생성 로직 등록
+@app.on_event("startup")
+async def on_startup():
+    # create_tables() 내부에서 Base.metadata.create_all() 을 실행합니다.
+    await create_tables()
 
 
 # 일단 시작페이지 articles로 리다이렉트
