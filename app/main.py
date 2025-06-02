@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import delete, update
 from pydantic import EmailStr
 from sqlalchemy.exc import IntegrityError
+from app.tts import lan_det, request_tts
 
 from app.database import get_db, create_tables
 from app.models import User, Article, Comment, Like
@@ -708,9 +709,12 @@ async def edit_profile(
 
 ###########STT############
 
-# 로깅 설정
+# 로거 설정 (main.py 상단에 추가)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# STT 관련 import (기존 stt.py에서 함수 import)
+from app.stt import transcribe_audio
 
 # STT 엔드포인트 수정
 @app.post("/transcribe")
@@ -730,39 +734,69 @@ async def transcribe(
         
         # 파일 확장자 체크
         if not audio_file.filename:
+            logger.error("No filename provided")
             raise HTTPException(status_code=400, detail="No file uploaded")
-            
+        
         file_ext = os.path.splitext(audio_file.filename)[1].lower()
-        if file_ext not in ['.wav', '.mp3', '.ogg', '.flac', '.m4a', '.aac']:
+        logger.info(f"Received audio file: {audio_file.filename}, extension: {file_ext}")
+        
+        # 지원되는 형식 확장 (브라우저 형식 포함)
+        allowed_formats = ['.wav', '.mp3', '.ogg', '.flac', '.m4a', '.aac', '.webm', '.mp4']
+        
+        if file_ext not in allowed_formats:
+            logger.error(f"Unsupported file format: {file_ext}")
             raise HTTPException(
                 status_code=400, 
-                detail=f"Unsupported audio format: {file_ext}"
+                detail=f"Unsupported audio format: {file_ext}. Supported formats: {', '.join(allowed_formats)}"
             )
+        
+        # 파일 크기 체크 (선택사항 - 100MB 제한)
+        file_size = 0
+        content = await audio_file.read()
+        file_size = len(content)
+        logger.info(f"File size: {file_size} bytes")
+        
+        if file_size > 100 * 1024 * 1024:  # 100MB
+            raise HTTPException(status_code=413, detail="File too large (max 100MB)")
+        
+        if file_size == 0:
+            raise HTTPException(status_code=400, detail="Empty file uploaded")
         
         # 임시 파일로 저장
         with tempfile.NamedTemporaryFile(suffix=file_ext, delete=False) as temp_file:
-            content = await audio_file.read()
             temp_file.write(content)
             temp_path = temp_file.name
         
+        logger.info(f"Saved temporary file: {temp_path}")
+        
         try:
             # STT 처리
+            logger.info("Starting STT processing...")
             result = transcribe_audio(
                 filepath=temp_path,
                 key=SPEECH_SERVICE_KEY,
                 region=SPEECH_REGION
             )
             
+            logger.info("STT processing completed successfully")
             return JSONResponse(content={
                 "success": True,
                 "detected_language": result.get("detected_language"),
                 "transcription": result.get("transcription", "")
             })
-            
+        
         finally:
             # 임시 파일 삭제
             if os.path.exists(temp_path):
-                os.unlink(temp_path)
+                try:
+                    os.unlink(temp_path)
+                    logger.info(f"Cleaned up temporary file: {temp_path}")
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to cleanup temp file: {cleanup_error}")
+    
+    except HTTPException:
+        # HTTPException은 그대로 재발생
+        raise
     
     except FileNotFoundError as e:
         logger.error(f"File not found error: {e}")
@@ -772,17 +806,43 @@ async def transcribe(
         )
     
     except ValueError as e:
-        logger.error(f"Unsupported format error: {e}")
+        logger.error(f"Audio processing error: {e}")
         return JSONResponse(
             status_code=400,
-            content={"success": False, "message": str(e)}
+            content={
+                "success": False, 
+                "message": str(e),
+                "error_details": "Audio format conversion failed"
+            }
         )
     
+    except RuntimeError as e:
+        logger.error(f"Runtime error: {e}")
+        error_message = str(e)
+        if "FFmpeg" in error_message:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "success": False, 
+                    "message": "Audio conversion service unavailable",
+                    "error_details": "FFmpeg is required for audio conversion. Please contact administrator."
+                }
+            )
+        else:
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "message": f"Runtime error: {error_message}"}
+            )
+    
     except Exception as e:
-        logger.error(f"Transcription error: {e}")
+        logger.error(f"Unexpected transcription error: {e}")
         return JSONResponse(
             status_code=500,
-            content={"success": False, "message": f"Transcription failed: {str(e)}"}
+            content={
+                "success": False, 
+                "message": "Transcription service temporarily unavailable",
+                "error_details": f"Internal error: {str(e)}"
+            }
         )
 
 # STT UI 페이지 (녹음 버튼)
@@ -792,3 +852,42 @@ async def transcribe_page(request: Request):
     if not user_id:
         return RedirectResponse(url="/login/", status_code=303)
     return templates.TemplateResponse("transcribe.html", {"request": request})
+
+# ── TTS 페이지 렌더링 (GET) ─────────────────────────────────────────
+@app.get("/tts", response_class=HTMLResponse)
+async def tts_page(request: Request):
+    """
+    텍스트 입력 폼을 보여주는 페이지.
+    """
+    # audio_uri=None ⇒ 재생 없음 (오디오 없음)
+    return templates.TemplateResponse("tts.html", {"request": request, "audio_uri": None})
+
+
+# ── TTS 요청 처리 (POST) ─────────────────────────────────────────
+@app.post("/tts", response_class=HTMLResponse)
+async def tts_submit(request: Request, text_input: str = Form(...)):
+    """
+    사용자가 입력한 text_input을 받아
+    1) 언어 감지(lan_det)
+    2) TTS 생성(request_tts) → bytes 반환
+    3) Base64 인코딩하여 data URI 형태로 템플릿에 전달
+    """
+    # 1) 언어 감지
+    lang_code = lan_det(text_input)
+    if not lang_code:
+        # 감지 실패 시, 오디오 없이 폼만 다시 렌더링
+        return templates.TemplateResponse("tts.html", {"request": request, "audio_uri": None})
+
+    # 2) TTS 생성 → mp3 bytes
+    audio_bytes = request_tts(text_input, lang_code)
+    if not audio_bytes:
+        # TTS 실패 시, 오디오 없이 폼만 다시 렌더링
+        return templates.TemplateResponse("tts.html", {"request": request, "audio_uri": None})
+
+    # 3) Base64 인코딩 & Data URI 생성
+    import base64
+    b64_str = base64.b64encode(audio_bytes).decode("utf-8")
+    data_uri = f"data:audio/mpeg;base64,{b64_str}"
+
+    # 4) 데이터 URI를 템플릿에 넘겨주면, 브라우저에서 <audio src="data:…">로 재생
+    return templates.TemplateResponse("tts.html", {"request": request, "audio_uri": data_uri})

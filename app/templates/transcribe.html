@@ -18,9 +18,62 @@
         border-radius: 10px;
         box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
       }
-      .upload-section {
+      .tab-nav {
+        display: flex;
+        margin-bottom: 20px;
+        border-bottom: 2px solid #e9ecef;
+      }
+      .tab-btn {
+        background: none;
+        border: none;
+        padding: 12px 24px;
+        cursor: pointer;
+        font-size: 16px;
+        color: #6c757d;
+        border-bottom: 2px solid transparent;
+        transition: all 0.3s;
+      }
+      .tab-btn.active {
+        color: #007bff;
+        border-bottom-color: #007bff;
+      }
+      .tab-btn:hover {
+        color: #007bff;
+      }
+      .tab-content {
+        display: none;
+      }
+      .tab-content.active {
+        display: block;
+      }
+      .upload-section,
+      .record-section {
         text-align: center;
         margin-bottom: 30px;
+      }
+      .record-controls {
+        margin: 30px 0;
+      }
+      .record-status {
+        margin: 15px 0;
+        padding: 10px;
+        border-radius: 5px;
+        font-weight: bold;
+      }
+      .recording {
+        background: #fff3cd;
+        color: #856404;
+        border: 1px solid #ffeaa7;
+      }
+      .recorded {
+        background: #d4edda;
+        color: #155724;
+        border: 1px solid #c3e6cb;
+      }
+      .error {
+        background: #f8d7da;
+        color: #721c24;
+        border: 1px solid #f5c6cb;
       }
       .file-input {
         margin: 20px 0;
@@ -53,10 +106,9 @@
         border-radius: 5px;
         border-left: 4px solid #007bff;
       }
-      .error {
-        color: #dc3545;
+      .result-section.error {
         background: #f8d7da;
-        border-color: #dc3545;
+        border-left-color: #dc3545;
       }
       .loading {
         display: none;
@@ -80,30 +132,75 @@
           transform: rotate(360deg);
         }
       }
+      .debug-info {
+        margin-top: 10px;
+        padding: 10px;
+        background: #f1f3f4;
+        border-radius: 5px;
+        font-size: 12px;
+        color: #666;
+        text-align: left;
+      }
     </style>
   </head>
   <body>
     <div class="container">
       <h1>음성 인식 (STT)</h1>
 
-      <div class="upload-section">
-        <h3>오디오 파일을 업로드하세요</h3>
-        <p>지원 형식: WAV, MP3, OGG, FLAC, M4A, AAC</p>
+      <!-- 탭 네비게이션 -->
+      <div class="tab-nav">
+        <button class="tab-btn active" onclick="showTab('upload')">
+          파일 업로드
+        </button>
+        <button class="tab-btn" onclick="showTab('record')">마이크 녹음</button>
+      </div>
 
-        <form id="transcribeForm" enctype="multipart/form-data">
-          <div class="file-input">
-            <input
-              type="file"
-              id="audioFile"
-              name="audio_file"
-              accept=".wav,.mp3,.ogg,.flac,.m4a,.aac"
-              required
-            />
+      <!-- 파일 업로드 탭 -->
+      <div id="uploadTab" class="tab-content active">
+        <div class="upload-section">
+          <h3>오디오 파일을 업로드하세요</h3>
+          <p>지원 형식: WAV, MP3, OGG, FLAC, M4A, AAC</p>
+
+          <form id="transcribeForm" enctype="multipart/form-data">
+            <div class="file-input">
+              <input
+                type="file"
+                id="audioFile"
+                name="audio_file"
+                accept=".wav,.mp3,.ogg,.flac,.m4a,.aac"
+              />
+            </div>
+            <button type="submit" class="btn" id="transcribeBtn">
+              음성 인식 시작
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <!-- 마이크 녹음 탭 -->
+      <div id="recordTab" class="tab-content">
+        <div class="record-section">
+          <h3>마이크로 음성을 녹음하세요</h3>
+          <p>녹음 버튼을 눌러 음성을 녹음하고 STT를 실행할 수 있습니다.</p>
+
+          <div class="record-controls">
+            <button class="btn" id="startRecord">🎤 녹음 시작</button>
+            <button class="btn" id="stopRecord" disabled>⏹️ 녹음 중지</button>
+            <button class="btn" id="playRecord" disabled>▶️ 재생</button>
+            <button class="btn" id="transcribeRecord" disabled>
+              음성 인식
+            </button>
           </div>
-          <button type="submit" class="btn" id="transcribeBtn">
-            음성 인식 시작
-          </button>
-        </form>
+
+          <div id="recordStatus" class="record-status"></div>
+          <audio
+            id="audioPlayback"
+            controls
+            style="display: none; margin-top: 15px"
+          ></audio>
+
+          <div id="debugInfo" class="debug-info" style="display: none"></div>
+        </div>
       </div>
 
       <div class="loading" id="loading">
@@ -130,6 +227,330 @@
     </div>
 
     <script>
+      let mediaRecorder;
+      let recordedChunks = [];
+      let recordedBlob = null;
+      let stream = null;
+
+      // 디버그 정보 표시
+      function showDebugInfo(info) {
+        const debugDiv = document.getElementById("debugInfo");
+        debugDiv.innerHTML = info;
+        debugDiv.style.display = "block";
+      }
+
+      // 탭 전환 함수
+      function showTab(tabName) {
+        // 모든 탭 버튼과 컨텐츠 비활성화
+        document
+          .querySelectorAll(".tab-btn")
+          .forEach((btn) => btn.classList.remove("active"));
+        document
+          .querySelectorAll(".tab-content")
+          .forEach((content) => content.classList.remove("active"));
+
+        // 선택된 탭 활성화
+        event.target.classList.add("active");
+        document.getElementById(tabName + "Tab").classList.add("active");
+      }
+
+      // 마이크 권한 및 지원 여부 확인
+      async function checkMicrophoneSupport() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error("이 브라우저는 마이크 녹음을 지원하지 않습니다.");
+        }
+
+        try {
+          // 권한 상태 확인
+          const permissionStatus = await navigator.permissions.query({
+            name: "microphone",
+          });
+          console.log("마이크 권한 상태:", permissionStatus.state);
+
+          return true;
+        } catch (error) {
+          console.log("권한 확인 실패, 직접 접근 시도");
+          return true;
+        }
+      }
+
+      // 마이크 녹음 기능 초기화
+      async function initializeRecording() {
+        try {
+          await checkMicrophoneSupport();
+
+          // 기존 스트림이 있으면 정리
+          if (stream) {
+            stream.getTracks().forEach((track) => track.stop());
+          }
+
+          const constraints = {
+            audio: {
+              sampleRate: 44100,
+              channelCount: 1,
+              volume: 1.0,
+              echoCancellation: true,
+              noiseSuppression: true,
+            },
+          };
+
+          stream = await navigator.mediaDevices.getUserMedia(constraints);
+
+          // MediaRecorder 옵션 설정
+          const options = {
+            mimeType: "audio/webm;codecs=opus",
+            audioBitsPerSecond: 128000,
+          };
+
+          // 브라우저별 호환성 확인
+          if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+            if (MediaRecorder.isTypeSupported("audio/webm")) {
+              options.mimeType = "audio/webm";
+            } else if (MediaRecorder.isTypeSupported("audio/mp4")) {
+              options.mimeType = "audio/mp4";
+            } else {
+              delete options.mimeType;
+            }
+          }
+
+          mediaRecorder = new MediaRecorder(stream, options);
+
+          showDebugInfo(`
+            마이크 초기화 성공<br>
+            MIME Type: ${mediaRecorder.mimeType}<br>
+            상태: ${mediaRecorder.state}
+          `);
+
+          mediaRecorder.ondataavailable = function (event) {
+            console.log("데이터 수신:", event.data.size, "bytes");
+            if (event.data.size > 0) {
+              recordedChunks.push(event.data);
+            }
+          };
+
+          mediaRecorder.onstop = function () {
+            console.log("녹음 중지, 청크 수:", recordedChunks.length);
+
+            if (recordedChunks.length === 0) {
+              showStatus("녹음 데이터가 없습니다. 다시 시도해주세요.", "error");
+              return;
+            }
+
+            // Blob 생성시 원본 MIME 타입 사용
+            recordedBlob = new Blob(recordedChunks, {
+              type: mediaRecorder.mimeType || "audio/webm",
+            });
+
+            console.log(
+              "Blob 생성:",
+              recordedBlob.size,
+              "bytes, type:",
+              recordedBlob.type
+            );
+
+            if (recordedBlob.size === 0) {
+              showStatus(
+                "녹음된 데이터가 비어있습니다. 다시 시도해주세요.",
+                "error"
+              );
+              return;
+            }
+
+            const audioUrl = URL.createObjectURL(recordedBlob);
+
+            const audioPlayback = document.getElementById("audioPlayback");
+            audioPlayback.src = audioUrl;
+            audioPlayback.style.display = "block";
+
+            document.getElementById("playRecord").disabled = false;
+            document.getElementById("transcribeRecord").disabled = false;
+
+            showStatus(
+              "녹음이 완료되었습니다. 재생하거나 음성인식을 실행하세요.",
+              "recorded"
+            );
+
+            showDebugInfo(`
+              녹음 완료<br>
+              파일 크기: ${recordedBlob.size} bytes<br>
+              파일 타입: ${recordedBlob.type}<br>
+              청크 수: ${recordedChunks.length}
+            `);
+          };
+
+          mediaRecorder.onerror = function (event) {
+            console.error("MediaRecorder 오류:", event.error);
+            showStatus(
+              "녹음 중 오류가 발생했습니다: " + event.error.message,
+              "error"
+            );
+          };
+
+          return true;
+        } catch (error) {
+          console.error("마이크 접근 오류:", error);
+          let errorMessage = "마이크에 접근할 수 없습니다. ";
+
+          if (error.name === "NotAllowedError") {
+            errorMessage += "마이크 권한을 허용해주세요.";
+          } else if (error.name === "NotFoundError") {
+            errorMessage += "마이크가 연결되어 있지 않습니다.";
+          } else if (error.name === "NotSupportedError") {
+            errorMessage += "이 브라우저는 마이크 녹음을 지원하지 않습니다.";
+          } else {
+            errorMessage += error.message;
+          }
+
+          showStatus(errorMessage, "error");
+          return false;
+        }
+      }
+
+      // 상태 메시지 표시
+      function showStatus(message, type) {
+        const status = document.getElementById("recordStatus");
+        status.textContent = message;
+        status.className = `record-status ${type}`;
+      }
+
+      // 녹음 시작
+      document
+        .getElementById("startRecord")
+        .addEventListener("click", async function () {
+          console.log("녹음 시작 버튼 클릭");
+
+          if (!mediaRecorder) {
+            showStatus("마이크 초기화 중...", "recording");
+            const initialized = await initializeRecording();
+            if (!initialized) return;
+          }
+
+          // 기존 데이터 초기화
+          recordedChunks = [];
+          recordedBlob = null;
+
+          try {
+            mediaRecorder.start(1000); // 1초마다 데이터 수집
+            console.log("MediaRecorder 상태:", mediaRecorder.state);
+
+            document.getElementById("startRecord").disabled = true;
+            document.getElementById("stopRecord").disabled = false;
+            document.getElementById("playRecord").disabled = true;
+            document.getElementById("transcribeRecord").disabled = true;
+            document.getElementById("audioPlayback").style.display = "none";
+
+            showStatus("녹음 중... 말씀하세요.", "recording");
+          } catch (error) {
+            console.error("녹음 시작 오류:", error);
+            showStatus(
+              "녹음 시작 중 오류가 발생했습니다: " + error.message,
+              "error"
+            );
+          }
+        });
+
+      // 녹음 중지
+      document
+        .getElementById("stopRecord")
+        .addEventListener("click", function () {
+          console.log("녹음 중지 버튼 클릭");
+
+          if (mediaRecorder && mediaRecorder.state === "recording") {
+            mediaRecorder.stop();
+            console.log("MediaRecorder.stop() 호출됨");
+          }
+
+          document.getElementById("startRecord").disabled = false;
+          document.getElementById("stopRecord").disabled = true;
+        });
+
+      // 재생
+      document
+        .getElementById("playRecord")
+        .addEventListener("click", function () {
+          const audioPlayback = document.getElementById("audioPlayback");
+          audioPlayback.play();
+        });
+
+      // 녹음된 오디오로 STT 실행
+      document
+        .getElementById("transcribeRecord")
+        .addEventListener("click", async function () {
+          if (!recordedBlob) {
+            alert("먼저 음성을 녹음해주세요.");
+            return;
+          }
+
+          console.log("STT 시작, Blob 크기:", recordedBlob.size);
+
+          const btn = document.getElementById("transcribeRecord");
+          const loading = document.getElementById("loading");
+          const result = document.getElementById("result");
+
+          btn.disabled = true;
+          btn.textContent = "처리 중...";
+          loading.style.display = "block";
+          result.style.display = "none";
+
+          const formData = new FormData();
+
+          // 파일 이름에 확장자 추가 (서버에서 형식 인식을 도움)
+          let fileName = "recording.webm";
+          if (recordedBlob.type.includes("mp4")) {
+            fileName = "recording.mp4";
+          } else if (recordedBlob.type.includes("wav")) {
+            fileName = "recording.wav";
+          }
+
+          formData.append("audio_file", recordedBlob, fileName);
+
+          try {
+            console.log("서버로 전송 중...");
+            const response = await fetch("/transcribe", {
+              method: "POST",
+              body: formData,
+            });
+
+            console.log("서버 응답 상태:", response.status);
+            const data = await response.json();
+            console.log("서버 응답 데이터:", data);
+
+            if (data.success) {
+              document.getElementById("detectedLang").textContent =
+                data.detected_language || "알 수 없음";
+              document.getElementById("transcriptionText").textContent =
+                data.transcription || "인식된 텍스트가 없습니다.";
+              result.classList.remove("error");
+              result.style.display = "block";
+            } else {
+              document.getElementById("detectedLang").textContent = "오류";
+              document.getElementById("transcriptionText").textContent =
+                data.message || "알 수 없는 오류가 발생했습니다.";
+              result.classList.add("error");
+              result.style.display = "block";
+
+              // 추가 오류 정보 표시
+              if (data.error_details) {
+                showDebugInfo(`오류 세부사항: ${data.error_details}`);
+              }
+            }
+          } catch (error) {
+            console.error("STT 요청 오류:", error);
+            document.getElementById("detectedLang").textContent = "오류";
+            document.getElementById("transcriptionText").textContent =
+              "서버와의 통신 중 오류가 발생했습니다: " + error.message;
+            result.classList.add("error");
+            result.style.display = "block";
+
+            showDebugInfo(`네트워크 오류: ${error.message}`);
+          } finally {
+            btn.disabled = false;
+            btn.textContent = "음성 인식";
+            loading.style.display = "none";
+          }
+        });
+
+      // 파일 업로드 STT (기존 기능)
       document
         .getElementById("transcribeForm")
         .addEventListener("submit", async function (e) {
@@ -145,7 +566,6 @@
             return;
           }
 
-          // UI 상태 변경
           btn.disabled = true;
           btn.textContent = "처리 중...";
           loading.style.display = "block";
@@ -163,7 +583,6 @@
             const data = await response.json();
 
             if (data.success) {
-              // 성공 결과 표시
               document.getElementById("detectedLang").textContent =
                 data.detected_language || "알 수 없음";
               document.getElementById("transcriptionText").textContent =
@@ -171,7 +590,6 @@
               result.classList.remove("error");
               result.style.display = "block";
             } else {
-              // 에러 결과 표시
               document.getElementById("detectedLang").textContent = "오류";
               document.getElementById("transcriptionText").textContent =
                 data.message || "알 수 없는 오류가 발생했습니다.";
@@ -186,12 +604,18 @@
             result.classList.add("error");
             result.style.display = "block";
           } finally {
-            // UI 상태 복원
             btn.disabled = false;
             btn.textContent = "음성 인식 시작";
             loading.style.display = "none";
           }
         });
+
+      // 페이지 종료 시 스트림 정리
+      window.addEventListener("beforeunload", function () {
+        if (stream) {
+          stream.getTracks().forEach((track) => track.stop());
+        }
+      });
     </script>
   </body>
 </html>

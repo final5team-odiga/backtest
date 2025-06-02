@@ -1,0 +1,33 @@
+<!-- app/templates/tts.html -->
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <title>텍스트 → 음성 (TTS)</title>
+  </head>
+  <body>
+    <h1>텍스트 입력 후 음성 재생</h1>
+
+    <form action="/tts" method="post">
+      <label for="text_input">읽을 텍스트:</label><br />
+      <textarea
+        id="text_input"
+        name="text_input"
+        rows="4"
+        cols="60"
+        placeholder="여기에 텍스트를 입력하세요"
+      ></textarea
+      ><br /><br />
+      <button type="submit">음성 생성</button>
+    </form>
+
+    {% if audio_uri %}
+    <hr />
+    <h2>생성된 음성 재생</h2>
+    <audio controls>
+      <source src="{{ audio_uri }}" type="audio/mpeg" />
+      브라우저가 오디오 재생을 지원하지 않습니다.
+    </audio>
+    {% endif %}
+  </body>
+</html>
