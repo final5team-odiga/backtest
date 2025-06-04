@@ -1,202 +1,140 @@
 import os
-import shutil
-import uuid
 import logging
 import tempfile
-from fastapi import FastAPI, Request, Form, HTTPException, Depends, UploadFile, File
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
-from fastapi.templating import Jinja2Templates
+import uuid
+
+from fastapi import (
+    FastAPI,
+    Request,
+    Form,
+    HTTPException,
+    Depends,
+    UploadFile,
+    File,
+    status
+)
+
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.exc import IntegrityError
 from starlette.middleware.sessions import SessionMiddleware
 from dotenv import load_dotenv
 from zoneinfo import ZoneInfo
-from sqlalchemy import delete, update
 from pydantic import EmailStr
-from sqlalchemy.exc import IntegrityError
-from app.tts import lan_det, request_tts
+
+from passlib.context import CryptContext
 
 from app.database import get_db, create_tables
 from app.models import User, Article, Comment, Like
 from app.schemas import (
-    UserCreate, ArticleCreate, ArticleUpdate,
-    CommentCreate, CommentUpdate, LikeCreate
+    UserCreate,
+    ArticleCreate,
+    ArticleUpdate,
+    CommentCreate,
+    CommentUpdate,
+    LikeCreate
 )
 from app.crud import (
-    create_user, create_article, update_article, delete_article,
-    create_comment, update_comment, delete_comment,
-    toggle_like, check_user_liked
+    create_user,
+    create_article,
+    update_article,
+    delete_article,
+    create_comment,
+    update_comment,
+    delete_comment,
+    toggle_like,
+    check_user_liked
 )
-from app.stt import transcribe_audio  # STT 모듈 임포트
-from passlib.context import CryptContext
+from app.stt import transcribe_audio
+from app.tts import lan_det, request_tts
 
-# 비밀번호 해싱 설정
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-# .env 로드 및 환경변수
+# ---------------------------------------------------
+# 환경 변수 로드 및 기본 설정
+# ---------------------------------------------------
 load_dotenv()
 SPEECH_SERVICE_KEY = os.getenv("SPEECH_SERVICE_KEY")
 SPEECH_REGION      = os.getenv("SPEECH_REGION")
 SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY")
 
-app = FastAPI(title="CRUD & STT Web App")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-#app = FastAPI()
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# Jinja2 템플릿 설정
-templates = Jinja2Templates(directory="app/templates")
+app = FastAPI(title="CRUD & STT Web App (JSON API)")
 
-# 세션 미들웨어 설정
+# 세션 미들웨어
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET_KEY)
 
-# # ② startup 이벤트에 테이블 생성 로직 등록
-# @app.on_event("startup")
-# async def on_startup():
-#     # create_tables() 내부에서 Base.metadata.create_all() 을 실행합니다.
-#     await create_tables()
-
-# Static 파일 경로
-if not os.path.isdir("static"): os.makedirs("static/profiles", exist_ok=True)
+# Static 파일 경로 (프로필 이미지 업로드 등)
+if not os.path.isdir("static"):
+    os.makedirs("static/profiles", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Database 테이블 생성
+
+# ---------------------------------------------------
+# 앱 시작 시 DB 테이블 생성
+# ---------------------------------------------------
 @app.on_event("startup")
 async def on_startup():
     await create_tables()
 
-# 현재 로그인된 사용자 체크
-async def get_current_user(request: Request):
+
+# ---------------------------------------------------
+# 유틸: 현재 로그인된 사용자 가져오기
+# ---------------------------------------------------
+async def get_current_user(request: Request) -> str | None:
     return request.session.get("user")
 
 
-# 일단 시작페이지 articles로 리다이렉트
-@app.get("/", response_class=HTMLResponse)
-async def home(request: Request):
-    # articles 목록으로 리디렉션
-    return RedirectResponse(url="/articles/", status_code=303)
+# ---------------------------------------------------
+# 인증: 회원가입 / 로그인 / 로그아웃
+# ---------------------------------------------------
 
-
-
-
-# 세션 미들웨어 설정
-load_dotenv()
-#app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET_KEY"))
-
-# 현재 로그인된 사용자 체크
-async def get_current_user(request: Request):
-    user_id = request.session.get("user")
-    if not user_id:
-        return None
-    return user_id
-
-# 회원가입 핸들러: 비밀번호 해싱하여 DB에 저장
-@app.get("/signup/", response_class=HTMLResponse)
-async def signup_form(request: Request):
-    return templates.TemplateResponse("signup.html", {"request": request})
-
-# @app.post("/signup/")
-# async def signup(
-#     request: Request,
-#     userID: str = Form(...),
-#     userName: str = Form(...),
-#     password: str = Form(...),
-#     userEmail: EmailStr = Form(...),
-#     userCountry: str = Form(...),
-#     userLanguage: str = Form(...),
-#     db: AsyncSession = Depends(get_db),
-# ):
-#     # 중복 확인
-#     # result = await db.execute(select(User).where(User.userID == userID))
-#     # if result.scalar_one_or_none():
-#     #     return templates.TemplateResponse(
-#     #         "signup.html",
-#     #         {"request": request, "error": "이미 존재하는 사용자입니다."},
-#     #         status_code=400,
-#     #     )
-
-#     try:
-#         new = await create_user(db, user_in)
-#     except IntegrityError:
-#         return templates.TemplateResponse(
-#             "signup.html",
-#             {"request": request, "error": "이미 존재하는 ID 또는 이메일입니다."},
-#             status_code=400,
-#         )
-#     return RedirectResponse(url="/login/", status_code=303)
-
-
-#     # 비밀번호 해싱
-#     hashed_pw = pwd_context.hash(password)
-#     user_in = UserCreate(
-#         userID=userID,
-#         userName=userName,
-#         userPasswordHash=hashed_pw,
-#         userEmail=userEmail,
-#         userCountry=userCountry,
-#         userLanguage=userLanguage,
-#     )
-#     # 직접 User 모델 생성
-#     db_user = User(
-#         userID=user_in.userID,
-#         userName=user_in.userName,
-#         userPasswordHash=user_in.userPasswordHash,
-#         userEmail=user_in.userEmail,
-#         userCountry=user_in.userCountry,
-#         userLanguage=user_in.userLanguage,
-#     )
-#     db.add(db_user)
-#     await db.commit()
-#     await db.refresh(db_user)
-#     return RedirectResponse(url="/login/", status_code=303)
-@app.post("/signup/")
+@app.post("/signup/", status_code=status.HTTP_201_CREATED)
 async def signup(
-    request: Request,
-    userID:       str      = Form(...),
-    userName:     str      = Form(...),
-    password:     str      = Form(...),
-    userEmail:    EmailStr = Form(...),
-    userCountry:  str      = Form(...),
-    userLanguage: str      = Form(...),
-    db:           AsyncSession = Depends(get_db),
+    userID: str = Form(...),
+    userName: str = Form(...),
+    password: str = Form(...),
+    userEmail: EmailStr = Form(...),
+    userCountry: str = Form(...),
+    userLanguage: str = Form(...),
+    db: AsyncSession = Depends(get_db),
 ):
-    # 1) (선택) ID 중복 확인
+    # 사용자 ID 중복 확인
     result = await db.execute(select(User).where(User.userID == userID))
     if result.scalar_one_or_none():
-        return templates.TemplateResponse(
-            "signup.html",
-            {"request": request, "error": "이미 존재하는 사용자입니다."},
-            status_code=400,
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"success": False, "error": "이미 존재하는 사용자입니다."}
         )
 
-    # 2) Pydantic 객체 & 해시 비밀번호 준비
+    # 비밀번호 해싱
     hashed_pw = pwd_context.hash(password)
     user_in = UserCreate(
         userID=userID,
         userName=userName,
-        userPasswordHash=password,
+        userPasswordHash=hashed_pw,
         userEmail=userEmail,
         userCountry=userCountry,
         userLanguage=userLanguage,
     )
 
-    # 3) DB 저장 시도 (ID 또는 EMAIL 중복시 IntegrityError 핸들링)
     try:
-        new_user = await create_user(db, user_in)
+        await create_user(db, user_in)
     except IntegrityError:
-        return templates.TemplateResponse(
-            "signup.html",
-            {"request": request, "error": "이미 존재하는 ID 또는 이메일입니다."},
-            status_code=400,
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"success": False, "error": "이미 존재하는 ID 또는 이메일입니다."}
         )
 
-    # 4) 성공하면 로그인 페이지로 리다이렉트
-    return RedirectResponse(url="/login/", status_code=303)
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content={"success": True, "message": "회원가입 성공"}
+    )
 
-# 로그인
-@app.get("/login/", response_class=HTMLResponse)
-async def login_form(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request})
 
 @app.post("/login/")
 async def login(
@@ -208,55 +146,115 @@ async def login(
     result = await db.execute(select(User).where(User.userID == userID))
     user = result.scalars().first()
     if not user or not pwd_context.verify(password, user.userPasswordHash):
-        return templates.TemplateResponse(
-            "login.html",
-            {"request": request, "error": "Invalid credentials"},
-            status_code=400,
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"success": False, "error": "아이디 또는 비밀번호가 잘못되었습니다."}
         )
-    request.session["user"] = user.userID
-    return RedirectResponse(url="/articles/", status_code=303)
 
-# 로그아웃
-@app.get("/logout/")
+    request.session["user"] = user.userID
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"success": True, "message": "로그인 성공", "userID": user.userID}
+    )
+
+
+@app.post("/logout/")
 async def logout(request: Request):
     request.session.clear()
-    return RedirectResponse(url="/articles/", status_code=303)
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"success": True, "message": "로그아웃 성공"}
+    )
 
-# 글 목록
-@app.get("/articles/", response_class=HTMLResponse)
-async def list_articles(request: Request, db: AsyncSession = Depends(get_db)):
+
+# ---------------------------------------------------
+# 게시판 CRUD (Articles / Comments / Likes)
+# ---------------------------------------------------
+
+@app.get("/articles/")
+async def list_articles(db: AsyncSession = Depends(get_db)):
+    """
+    모든 글 목록을 최신 순서로 반환
+    """
     result = await db.execute(select(Article).order_by(Article.createdAt.desc()))
     articles = result.scalars().all()
-    return templates.TemplateResponse("articles.html", {"request": request, "articles": articles})
 
-# 글 상세 및 댓글 목록
-@app.get("/articles/{article_id}", response_class=HTMLResponse)
-async def article_detail(request: Request, article_id: str, db: AsyncSession = Depends(get_db)):
-    ### 클라이언트 시간 js로 받아와서 timezone으로)
-    #tz = ZoneInfo(timezone)
+    # JSON 직렬화용: Pydantic Schema를 따로 쓰지 않고, 간단히 dict 변환
+    article_list = []
+    for art in articles:
+        article_list.append({
+            "articleID": art.articleID,
+            "articleTitle": art.articleTitle,
+            "articleAuthor": art.articleAuthor,
+            "imageURL": art.imageURL,
+            "travelCountry": art.travelCountry,
+            "travelCity": art.travelCity,
+            "shareLink": art.shareLink,
+            "price": art.price,
+            "createdAt": art.createdAt.isoformat(),
+            "updatedAt": art.updatedAt.isoformat() if art.updatedAt else None
+        })
+
+    return JSONResponse(status_code=200, content={"success": True, "articles": article_list})
+
+
+@app.get("/articles/{article_id}")
+async def article_detail(
+    article_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    특정 글의 상세 정보 + 댓글 목록 반환
+    """
     result = await db.execute(select(Article).where(Article.articleID == article_id))
     article = result.scalars().first()
     if not article:
         raise HTTPException(status_code=404, detail="Article not found")
+
+    # 댓글 로드
     comments_result = await db.execute(
         select(Comment).where(Comment.articleID == article_id).order_by(Comment.createdAt.asc())
     )
     comments = comments_result.scalars().all()
-    return templates.TemplateResponse(
-        "article_detail.html",
-        {"request": request, "article": article, "comments": comments},
-    )
 
-# 글 생성 (로그인 필요)
-@app.get("/create_article/", response_class=HTMLResponse)
-async def create_article_page(request: Request):
-    user_id = request.session.get("user")
-    if not request.session.get("user"):
-        return RedirectResponse(url="/login/", status_code=303)
-    return templates.TemplateResponse("create_article.html", {"request": request, "user_id": user_id})
+    comment_list = []
+    for com in comments:
+        comment_list.append({
+            "commentID": com.commentID,
+            "articleID": com.articleID,
+            "commentAuthor": com.commentAuthor,
+            "content": com.content,
+            "createdAt": com.createdAt.isoformat(),
+            "updatedAt": com.updatedAt.isoformat() if com.updatedAt else None
+        })
 
-@app.post("/create_article/")
-async def create_article_post(
+    # 로그인 유저가 좋아요를 눌렀는지 여부
+    user_id = await get_current_user(request)
+    user_liked = False
+    if user_id:
+        user_liked = await check_user_liked(db, article_id, user_id)
+
+    article_data = {
+        "articleID": article.articleID,
+        "articleTitle": article.articleTitle,
+        "articleAuthor": article.articleAuthor,
+        "imageURL": article.imageURL,
+        "travelCountry": article.travelCountry,
+        "travelCity": article.travelCity,
+        "shareLink": article.shareLink,
+        "price": article.price,
+        "createdAt": article.createdAt.isoformat(),
+        "updatedAt": article.updatedAt.isoformat() if article.updatedAt else None,
+        "comments": comment_list,
+        "userLiked": user_liked
+    }
+
+    return JSONResponse(status_code=200, content={"success": True, "article": article_data})
+
+
+@app.post("/articles/")
+async def create_article_endpoint(
     request: Request,
     articleTitle: str = Form(...),
     imageURL: str = Form(None),
@@ -266,9 +264,16 @@ async def create_article_post(
     price: float = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
-    user_id = request.session.get("user")
+    """
+    새 글 생성 (로그인 필요)
+    """
+    user_id = await get_current_user(request)
     if not user_id:
-        return RedirectResponse(url="/login/", status_code=303)
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"success": False, "message": "로그인이 필요합니다."}
+        )
+
     article_in = ArticleCreate(
         articleTitle=articleTitle,
         articleAuthor=user_id,
@@ -279,188 +284,262 @@ async def create_article_post(
         price=price,
     )
     db_article = await create_article(db, article_in)
-    return RedirectResponse(url=f"/articles/{db_article.articleID}", status_code=303)
 
-
-# 글 수정 (로그인 및 작성자 확인)
-@app.get("/articles/{article_id}/edit", response_class=HTMLResponse)
-async def edit_article_page(request: Request, article_id: str, db: AsyncSession = Depends(get_db)):
-    user_id = request.session.get("user")
-    if not user_id:
-        return RedirectResponse(url="/login/", status_code=303)
-    result = await db.execute(select(Article).where(Article.articleID == article_id))
-    article = result.scalars().first()
-    if not article:
-        raise HTTPException(status_code=404, detail="Article not found")
-    if article.articleAuthor != user_id:
-        raise HTTPException(status_code=403, detail="Not authorized to edit this article")
-    return templates.TemplateResponse("edit_article.html", {"request": request, "article": article})
-
-@app.post("/articles/{article_id}/edit")
-async def edit_article(request: Request, article_id: str,
-                        articleTitle: str = Form(None), imageURL: str = Form(None),
-                        travelCountry: str = Form(None), travelCity: str = Form(None),
-                        shareLink: str = Form(None), price: float = Form(None),
-                        db: AsyncSession = Depends(get_db)):
-    user_id = request.session.get("user")
-    if not user_id:
-        return RedirectResponse(url="/login/", status_code=303)
-    result = await db.execute(select(Article).where(Article.articleID == article_id))
-    article = result.scalars().first()
-    if not article:
-        raise HTTPException(status_code=404, detail="Article not found")
-    if article.articleAuthor != user_id:
-        raise HTTPException(status_code=403, detail="Not authorized to edit this article")
-    update_in = ArticleUpdate(articleTitle=articleTitle, imageURL=imageURL,
-                               travelCountry=travelCountry, travelCity=travelCity,
-                               shareLink=shareLink, price=price)
-    await update_article(db, article_id, update_in)
-    return RedirectResponse(url=f"/articles/{article_id}", status_code=303)
-
-# 글 삭제 (로그인 및 작성자 확인)
-@app.post("/articles/{article_id}/delete")
-async def delete_article_endpoint(request: Request, article_id: str, db: AsyncSession = Depends(get_db)):
-    user_id = request.session.get("user")
-    if not user_id:
-        return RedirectResponse(url="/login/", status_code=303)
-    result = await db.execute(select(Article).where(Article.articleID == article_id))
-    article = result.scalars().first()
-    if not article:
-        raise HTTPException(status_code=404, detail="Article not found")
-    if article.articleAuthor != user_id:
-        raise HTTPException(status_code=403, detail="Not authorized to delete this article")
-    await delete_article(db, article_id)
-    return RedirectResponse(url="/articles/", status_code=303)
-
-# 댓글 생성
-@app.post("/articles/{article_id}/comments")
-async def post_comment(request: Request, article_id: str,
-                        content: str = Form(...), db: AsyncSession = Depends(get_db)):
-    user_id = request.session.get("user")
-    if not user_id:
-        return RedirectResponse(url="/login/", status_code=303)
-    await create_comment(db, CommentCreate(articleID=article_id,
-                                          commentAuthor=user_id,
-                                          content=content))
-    return RedirectResponse(url=f"/articles/{article_id}", status_code=303)
-
-# 댓글 수정
-@app.get("/articles/{article_id}/comments/{comment_id}/edit", response_class=HTMLResponse)
-async def edit_comment_page(request: Request, article_id: str, comment_id: int, db: AsyncSession = Depends(get_db)):
-    user_id = request.session.get("user")
-    if not user_id:
-        return RedirectResponse(url="/login/", status_code=303)
-    art = await db.execute(select(Article).where(Article.articleID == article_id))
-    if not art.scalars().first():
-        raise HTTPException(status_code=404, detail="Article not found")
-    com = await db.execute(select(Comment).where(Comment.commentID == comment_id))
-    comment = com.scalars().first()
-    if not comment:
-        raise HTTPException(status_code=404, detail="Comment not found")
-    if comment.commentAuthor != user_id:
-        raise HTTPException(status_code=403, detail="Not authorized to edit this comment")
-    return templates.TemplateResponse("edit_comment.html", {"request": request, "article_id": article_id, "comment": comment})
-
-@app.post("/articles/{article_id}/comments/{comment_id}/edit")
-async def edit_comment(request: Request, article_id: str, comment_id: int,
-                        content: str = Form(...), db: AsyncSession = Depends(get_db)):
-    user_id = request.session.get("user")
-    if not user_id:
-        return RedirectResponse(url="/login/", status_code=303)
-    await update_comment(db, comment_id, CommentUpdate(content=content))
-    return RedirectResponse(url=f"/articles/{article_id}", status_code=303)
-
-# 댓글 삭제
-@app.post("/articles/{article_id}/comments/{comment_id}/delete")
-async def delete_comment_endpoint(request: Request, article_id: str, comment_id: int, db: AsyncSession = Depends(get_db)):
-    user_id = request.session.get("user")
-    if not user_id:
-        return RedirectResponse(url="/login/", status_code=303)
-    await delete_comment(db, comment_id)
-    return RedirectResponse(url=f"/articles/{article_id}", status_code=303)
-
-
-@app.get("/articles/{article_id}", response_class=HTMLResponse)
-async def article_detail(request: Request, article_id: str, db: AsyncSession = Depends(get_db)):
-    user_id = request.session.get("user")
-    
-    result = await db.execute(select(Article).where(Article.articleID == article_id))
-    article = result.scalars().first()
-    if not article:
-        raise HTTPException(status_code=404, detail="Article not found")
-    
-    comments_result = await db.execute(
-        select(Comment).where(Comment.articleID == article_id).order_by(Comment.createdAt.asc())
-    )
-    comments = comments_result.scalars().all()
-    
-    # Check if the logged-in user has liked this article
-    user_liked = await check_user_liked(db, article_id, user_id) if user_id else False
-    
-    return templates.TemplateResponse(
-        "article_detail.html",
-        {
-            "request": request, 
-            "article": article, 
-            "comments": comments,
-            "user_id": user_id,
-            "user_liked": user_liked
-        },
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content={
+            "success": True,
+            "message": "게시글 생성 성공",
+            "articleID": db_article.articleID
+        }
     )
 
-# Toggle like endpoint (AJAX)
-@app.post("/articles/{article_id}/like")
-async def like_article(
-    request: Request, 
-    article_id: str, 
-    db: AsyncSession = Depends(get_db)
+
+@app.put("/articles/{article_id}")
+async def edit_article(
+    request: Request,
+    article_id: str,
+    articleTitle: str = Form(None),
+    imageURL: str = Form(None),
+    travelCountry: str = Form(None),
+    travelCity: str = Form(None),
+    shareLink: str = Form(None),
+    price: float = Form(None),
+    db: AsyncSession = Depends(get_db),
 ):
-    user_id = request.session.get("user")
+    """
+    글 수정 (로그인 & 작성자 확인)
+    """
+    user_id = await get_current_user(request)
     if not user_id:
         return JSONResponse(
-            status_code=401,
-            content={"success": False, "message": "Login required to like articles"}
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"success": False, "message": "로그인이 필요합니다."}
         )
-    
-    result = await toggle_like(db, article_id, user_id)
-    return JSONResponse(content=result)
+
+    result = await db.execute(select(Article).where(Article.articleID == article_id))
+    article = result.scalars().first()
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+
+    if article.articleAuthor != user_id:
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"success": False, "message": "해당 글을 수정할 권한이 없습니다."}
+        )
+
+    update_in = ArticleUpdate(
+        articleTitle=articleTitle,
+        imageURL=imageURL,
+        travelCountry=travelCountry,
+        travelCity=travelCity,
+        shareLink=shareLink,
+        price=price
+    )
+    await update_article(db, article_id, update_in)
+
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"success": True, "message": "게시글 수정 성공"}
+    )
 
 
-# ── 마이페이지 ─────────────────────────────────────────
-# @app.get("/mypage/", response_class=HTMLResponse)
-# async def mypage(request: Request, db: AsyncSession = Depends(get_db)):
-#     user_id = request.session.get("user")
-#     if not user_id:
-#         return RedirectResponse(url="/login/", status_code=303)
-
-#     # 본인이 쓴 글만 조회
-#     result = await db.execute(
-#         select(Article)
-#         .where(Article.articleAuthor == user_id)
-#         .order_by(Article.createdAt.desc())
-#     )
-#     my_articles = result.scalars().all()
-
-#     return templates.TemplateResponse(
-#         "mypage.html",
-#         {
-#             "request": request,
-#             "user_id": user_id,
-#             "articles": my_articles,
-#         },
-#     )
-
-@app.get("/mypage/", response_class=HTMLResponse)
-async def mypage(request: Request, db: AsyncSession = Depends(get_db)):
-    user_id = request.session.get("user")
+@app.delete("/articles/{article_id}")
+async def delete_article_endpoint(
+    request: Request,
+    article_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    글 삭제 (로그인 & 작성자 확인)
+    """
+    user_id = await get_current_user(request)
     if not user_id:
-        return RedirectResponse(url="/login/", status_code=303)
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"success": False, "message": "로그인이 필요합니다."}
+        )
 
-    # 1) 사용자 정보 로드
+    result = await db.execute(select(Article).where(Article.articleID == article_id))
+    article = result.scalars().first()
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+
+    if article.articleAuthor != user_id:
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"success": False, "message": "해당 글을 삭제할 권한이 없습니다."}
+        )
+
+    await delete_article(db, article_id)
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"success": True, "message": "게시글 삭제 성공"}
+    )
+
+
+@app.post("/articles/{article_id}/comments/")
+async def post_comment(
+    request: Request,
+    article_id: str,
+    content: str = Form(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    댓글 생성 (로그인 필요)
+    """
+    user_id = await get_current_user(request)
+    if not user_id:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"success": False, "message": "로그인이 필요합니다."}
+        )
+
+    # 게시글 존재 여부 확인
+    result = await db.execute(select(Article).where(Article.articleID == article_id))
+    if not result.scalars().first():
+        raise HTTPException(status_code=404, detail="Article not found")
+
+    await create_comment(db, CommentCreate(
+        articleID=article_id,
+        commentAuthor=user_id,
+        content=content
+    ))
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content={"success": True, "message": "댓글 작성 성공"}
+    )
+
+
+@app.put("/articles/{article_id}/comments/{comment_id}")
+async def edit_comment(
+    request: Request,
+    article_id: str,
+    comment_id: int,
+    content: str = Form(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    댓글 수정 (로그인 & 댓글 작성자 확인)
+    """
+    user_id = await get_current_user(request)
+    if not user_id:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"success": False, "message": "로그인이 필요합니다."}
+        )
+
+    # 게시글 & 댓글 존재 여부 확인
+    art_res = await db.execute(select(Article).where(Article.articleID == article_id))
+    if not art_res.scalars().first():
+        raise HTTPException(status_code=404, detail="Article not found")
+
+    com_res = await db.execute(select(Comment).where(Comment.commentID == comment_id))
+    comment = com_res.scalars().first()
+    if not comment:
+        raise HTTPException(status_code=404, detail="Comment not found")
+
+    if comment.commentAuthor != user_id:
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"success": False, "message": "해당 댓글을 수정할 권한이 없습니다."}
+        )
+
+    await update_comment(db, comment_id, CommentUpdate(content=content))
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"success": True, "message": "댓글 수정 성공"}
+    )
+
+
+@app.delete("/articles/{article_id}/comments/{comment_id}")
+async def delete_comment_endpoint(
+    request: Request,
+    article_id: str,
+    comment_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    댓글 삭제 (로그인 필요)
+    """
+    user_id = await get_current_user(request)
+    if not user_id:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"success": False, "message": "로그인이 필요합니다."}
+        )
+
+    # 게시글 & 댓글 존재 여부 확인
+    art_res = await db.execute(select(Article).where(Article.articleID == article_id))
+    if not art_res.scalars().first():
+        raise HTTPException(status_code=404, detail="Article not found")
+
+    com_res = await db.execute(select(Comment).where(Comment.commentID == comment_id))
+    comment = com_res.scalars().first()
+    if not comment:
+        raise HTTPException(status_code=404, detail="Comment not found")
+
+    if comment.commentAuthor != user_id:
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"success": False, "message": "해당 댓글을 삭제할 권한이 없습니다."}
+        )
+
+    await delete_comment(db, comment_id)
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"success": True, "message": "댓글 삭제 성공"}
+    )
+
+
+@app.post("/articles/{article_id}/like/")
+async def like_article(
+    request: Request,
+    article_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    좋아요 토글 (로그인 필요)
+    """
+    user_id = await get_current_user(request)
+    if not user_id:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"success": False, "message": "로그인이 필요합니다."}
+        )
+
+    result = await toggle_like(db, article_id, user_id)
+    # result는 {"success": bool, "liked": bool, "totalLikes": int} 형태라고 가정
+    return JSONResponse(status_code=200, content=result)
+
+
+# ---------------------------------------------------
+# 마이페이지 / 프로필 / 회원 탈퇴
+# ---------------------------------------------------
+
+@app.get("/mypage/")
+async def mypage(request: Request, db: AsyncSession = Depends(get_db)):
+    """
+    마이페이지: 현재 로그인된 사용자의 정보 + 작성한 게시글 목록 반환
+    """
+    user_id = await get_current_user(request)
+    if not user_id:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"success": False, "message": "로그인이 필요합니다."}
+        )
+
+    # 사용자 정보 로드
     result_user = await db.execute(select(User).where(User.userID == user_id))
     user = result_user.scalars().first()
+    if not user:
+        request.session.clear()
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"success": False, "message": "유효하지 않은 세션입니다. 다시 로그인해주세요."}
+        )
 
-    # 2) 본인이 쓴 글 로드
+    # 본인이 쓴 글 로드
     result_articles = await db.execute(
         select(Article)
         .where(Article.articleAuthor == user_id)
@@ -468,154 +547,61 @@ async def mypage(request: Request, db: AsyncSession = Depends(get_db)):
     )
     my_articles = result_articles.scalars().all()
 
-    # 3) 템플릿에 both user and articles 전달
-    return templates.TemplateResponse(
-        "mypage.html",
-        {
-            "request": request,
-            "user": user,             # ← user 추가
-            "articles": my_articles,
-        },
-    )
+    article_list = []
+    for art in my_articles:
+        article_list.append({
+            "articleID": art.articleID,
+            "articleTitle": art.articleTitle,
+            "createdAt": art.createdAt.isoformat(),
+            "updatedAt": art.updatedAt.isoformat() if art.updatedAt else None
+        })
+
+    user_data = {
+        "userID": user.userID,
+        "userName": user.userName,
+        "userEmail": user.userEmail,
+        "userCountry": user.userCountry,
+        "userLanguage": user.userLanguage,
+        "profileImage": user.profileImage,
+        "createdAt": user.createdAt.isoformat(),
+        "updatedAt": user.updatedAt.isoformat() if user.updatedAt else None,
+        "myArticles": article_list
+    }
+
+    return JSONResponse(status_code=200, content={"success": True, "user": user_data})
 
 
-# ── 회원 탈퇴 ─────────────────────────────────────────
-@app.get("/delete_account/", response_class=HTMLResponse)
-async def confirm_delete_account(request: Request):
-    user_id = request.session.get("user")
-    if not user_id:
-        return RedirectResponse(url="/login/", status_code=303)
-    # 확인 페이지 렌더링
-    return templates.TemplateResponse("delete_account.html", {"request": request})
-
-
-@app.post("/delete_account/")
-async def delete_account(request: Request, db: AsyncSession = Depends(get_db)):
-    user_id = request.session.get("user")
-    if not user_id:
-        return RedirectResponse(url="/login/", status_code=303)
-
-    # 1) 댓글 삭제
-    await db.execute(delete(Comment).where(Comment.commentAuthor == user_id))
-    # 2) 좋아요 삭제
-    await db.execute(delete(Like).where(Like.userID == user_id))
-    # 3) 게시글 삭제
-    await db.execute(delete(Article).where(Article.articleAuthor == user_id))
-    # 4) 회원 삭제
-    await db.execute(delete(User).where(User.userID == user_id))
-
-    await db.commit()
-    # 세션 비우기
-    request.session.clear()
-
-    # 탈퇴 후 Articles 목록을 바로 렌더링
-    result = await db.execute(
-        select(Article).order_by(Article.createdAt.desc())
-    )
-    articles = result.scalars().all()
-    return templates.TemplateResponse(
-        "articles.html",
-        { "request": request, "articles": articles }
-    )
-
-
-# … 기존 import 유지
-
-# ── 회원 정보 수정 폼 ─────────────────────────────────────
-@app.get("/profile/edit/", response_class=HTMLResponse)
-async def edit_profile_form(request: Request, db: AsyncSession = Depends(get_db)):
-    user_id = request.session.get("user")
-    if not user_id:
-        return RedirectResponse("/login/", status_code=303)
-
-    result = await db.execute(select(User).where(User.userID == user_id))
-    user = result.scalars().first()
-    if not user:
-        # 세션에 남아있는 user가 DB에 없다면 로그아웃 시키고 로그인 페이지로
-        request.session.clear()
-        return RedirectResponse("/login/", status_code=303)
-
-    return templates.TemplateResponse(
-        "edit_profile.html",
-        {
-            "request": request,
-            "user": user
-        },
-    )
-
-# ── 회원 정보 수정 처리 ────────────────────────────────────
-# @app.post("/profile/edit/")
-# async def edit_profile(
-#     request: Request,
-#     userName: str = Form(...),
-#     profile_image: UploadFile = File(None),
-#     userCountry: str = Form(None),
-#     userLanguage: str = Form(None),
-#     password: str = Form(None),
-#     db: AsyncSession = Depends(get_db),
-# ):
-#     user_id = request.session.get("user")
-#     if not user_id:
-#         return RedirectResponse("/login/", status_code=303)
-    
-#     # ▶️ 디버그 로그
-#     print("profile_image object:", profile_image)
-#     if profile_image:
-#         print("filename:", profile_image.filename)
-#         content = await profile_image.read()
-#         print("content size:", len(content))
-#     else:
-#         print("no file uploaded")
-
-#     # DB에서 사용자 로드
-#     result = await db.execute(select(User).where(User.userID == user_id))
-#     user = result.scalars().first()
-#     if not user:
-#         request.session.clear()
-#         return RedirectResponse("/login/", status_code=303)
-
-#     # 업데이트할 필드 준비
-#     update_data = {
-#         "userName": userName,
-#         "userCountry": userCountry,
-#         "userLanguage": userLanguage,
-#     }
-#     if password:
-#         # 비밀번호가 비어있지 않다면 해싱해서 저장
-#         hashed_pw = pwd_context.hash(password)
-#         update_data["userPasswordHash"] = hashed_pw
-
-#     # 실제 업데이트 실행
-#     await db.execute(
-#         update(User)
-#         .where(User.userID == user_id)
-#         .values(**update_data)
-#     )
-#     await db.commit()
-
-#     # 수정 후 마이페이지나 프로필 보기 페이지로 리다이렉트
-#     return RedirectResponse(url="/mypage/", status_code=303)
-
-@app.post("/profile/edit/")
+@app.put("/profile/")
 async def edit_profile(
     request: Request,
     userName: str = Form(...),
-    profile_image: UploadFile = File(None),
     userEmail: str = Form(...),
     userCountry: str = Form(None),
     userLanguage: str = Form(None),
     password: str = Form(None),
+    profile_image: UploadFile = File(None),
     db: AsyncSession = Depends(get_db),
 ):
-    user_id = request.session.get("user")
+    """
+    프로필 수정 (로그인 필요)
+    """
+    user_id = await get_current_user(request)
     if not user_id:
-        return RedirectResponse("/login/", status_code=303)
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"success": False, "message": "로그인이 필요합니다."}
+        )
 
-    # 1) 사용자 로드
+    # DB에서 사용자 로드
     result = await db.execute(select(User).where(User.userID == user_id))
     user = result.scalars().first()
+    if not user:
+        request.session.clear()
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"success": False, "message": "유효하지 않은 세션입니다. 다시 로그인해주세요."}
+        )
 
-    # 2) 업데이트 데이터 준비
     update_data = {
         "userName": userName,
         "userEmail": userEmail,
@@ -625,10 +611,7 @@ async def edit_profile(
     if password:
         update_data["userPasswordHash"] = pwd_context.hash(password)
 
-    if userEmail:
-        update_data["userEmail"] = userEmail
-
-    # 3) 파일 저장 & 경로 추가
+    # 프로필 이미지가 업로드되었다면 저장하고 URL 업데이트
     if profile_image:
         ext = os.path.splitext(profile_image.filename)[1]
         save_dir = "static/profiles"
@@ -637,154 +620,118 @@ async def edit_profile(
         content = await profile_image.read()
         with open(save_path, "wb") as f:
             f.write(content)
-        # DB에 저장할 경로
         update_data["profileImage"] = f"/static/profiles/{user_id}{ext}"
 
-    # 4) 한 번에 업데이트 실행
     await db.execute(
-        update(User)
+        (select(User))
         .where(User.userID == user_id)
-        .values(**update_data)
+        .execution_options(synchronize_session="fetch")
+        .update(update_data)
     )
     await db.commit()
 
-    return RedirectResponse(url="/mypage/", status_code=303)
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"success": True, "message": "프로필 수정 성공"}
+    )
 
 
-####### 프로필 이미지 설정 ###########3
-if not os.path.isdir("static"):
-    os.makedirs("static/profiles", exist_ok=True)
-
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-
-@app.post("/profile/edit/")
-async def edit_profile(
-    request: Request,
-    userName: str = Form(...),
-    userEmail: str = Form(...),
-    userCountry: str = Form(None),
-    userLanguage: str = Form(None),
-    password: str = Form(None),
-    profile_image: UploadFile = File(None),      # <- 여기에 추가
-    db: AsyncSession = Depends(get_db),
-):
-    user_id = request.session.get("user")
+@app.delete("/delete_account/")
+async def delete_account(request: Request, db: AsyncSession = Depends(get_db)):
+    """
+    회원 탈퇴 (로그인 필요)
+    """
+    user_id = await get_current_user(request)
     if not user_id:
-        return RedirectResponse("/login/", status_code=303)
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"success": False, "message": "로그인이 필요합니다."}
+        )
 
-    # 1) DB에서 사용자 로드
-    result = await db.execute(select(User).where(User.userID == user_id))
-    user = result.scalars().first()
-
-    # 2) 업데이트 필드 준비
-    update_data = {
-        "userName": userName,
-        "userEmail":userEmail,
-        "userCountry": userCountry,
-        "userLanguage": userLanguage,
-    }
-    if password:
-        update_data["userPasswordHash"] = pwd_context.hash(password)
-
-    # 3) 파일 저장 & 경로 업데이트
-    if profile_image:
-        # 확장자 추출
-        ext = os.path.splitext(profile_image.filename)[1]
-        # 저장 경로 결정
-        save_path = f"static/profiles/{user_id}{ext}"
-        # 실제 파일 쓰기
-        with open(save_path, "wb") as f:
-            content = await profile_image.read()
-            f.write(content)
-        # DB에 저장할 URL 경로
-        update_data["profileImage"] = f"/static/profiles/{user_id}{ext}"
-
-    # 4) DB 업데이트
-    await db.execute(update(User).where(User.userID == user_id).values(**update_data))
+    # 댓글, 좋아요, 게시글, 사용자 순서로 삭제
+    await db.execute(delete(Comment).where(Comment.commentAuthor == user_id))
+    await db.execute(delete(Like).where(Like.userID == user_id))
+    await db.execute(delete(Article).where(Article.articleAuthor == user_id))
+    await db.execute(delete(User).where(User.userID == user_id))
     await db.commit()
 
-    return RedirectResponse(url="/mypage/", status_code=303)
+    request.session.clear()
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"success": True, "message": "회원 탈퇴 성공"}
+    )
 
 
-###########STT############
+# ---------------------------------------------------
+# STT 엔드포인트 (JSON)
+# ---------------------------------------------------
 
-# 로거 설정 (main.py 상단에 추가)
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# STT 관련 import (기존 stt.py에서 함수 import)
-from app.stt import transcribe_audio
-
-# STT 엔드포인트 수정
-@app.post("/transcribe")
+@app.post("/transcribe/")
 async def transcribe(
     request: Request,
     audio_file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db)
 ):
+    """
+    Multipart-form-data로 받은 음성 파일을 STT 처리하고,
+    JSON(정상 응답: { success, detected_language, transcription }) 형태로 반환.
+    """
     try:
-        # 로그인 체크 (선택사항)
-        user_id = request.session.get("user")
+        # 로그인 체크
+        user_id = await get_current_user(request)
         if not user_id:
             return JSONResponse(
-                status_code=401,
+                status_code=status.HTTP_401_UNAUTHORIZED,
                 content={"success": False, "message": "Login required"}
             )
-        
-        # 파일 확장자 체크
+
+        # 업로드 파일 검사
         if not audio_file.filename:
             logger.error("No filename provided")
             raise HTTPException(status_code=400, detail="No file uploaded")
-        
+
         file_ext = os.path.splitext(audio_file.filename)[1].lower()
-        logger.info(f"Received audio file: {audio_file.filename}, extension: {file_ext}")
-        
-        # 지원되는 형식 확장 (브라우저 형식 포함)
         allowed_formats = ['.wav', '.mp3', '.ogg', '.flac', '.m4a', '.aac', '.webm', '.mp4']
-        
         if file_ext not in allowed_formats:
             logger.error(f"Unsupported file format: {file_ext}")
             raise HTTPException(
-                status_code=400, 
+                status_code=400,
                 detail=f"Unsupported audio format: {file_ext}. Supported formats: {', '.join(allowed_formats)}"
             )
-        
-        # 파일 크기 체크 (선택사항 - 100MB 제한)
-        file_size = 0
+
         content = await audio_file.read()
         file_size = len(content)
-        logger.info(f"File size: {file_size} bytes")
-        
-        if file_size > 100 * 1024 * 1024:  # 100MB
+        logger.info(f"Received audio file: {audio_file.filename} ({file_size} bytes)")
+
+        if file_size > 100 * 1024 * 1024:
             raise HTTPException(status_code=413, detail="File too large (max 100MB)")
-        
         if file_size == 0:
             raise HTTPException(status_code=400, detail="Empty file uploaded")
-        
+
         # 임시 파일로 저장
         with tempfile.NamedTemporaryFile(suffix=file_ext, delete=False) as temp_file:
             temp_file.write(content)
             temp_path = temp_file.name
-        
         logger.info(f"Saved temporary file: {temp_path}")
-        
+
         try:
-            # STT 처리
+            # STT 수행
             logger.info("Starting STT processing...")
             result = transcribe_audio(
                 filepath=temp_path,
                 key=SPEECH_SERVICE_KEY,
                 region=SPEECH_REGION
             )
-            
             logger.info("STT processing completed successfully")
-            return JSONResponse(content={
-                "success": True,
-                "detected_language": result.get("detected_language"),
-                "transcription": result.get("transcription", "")
-            })
-        
+
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "success": True,
+                    "detected_language": result.get("detected_language"),
+                    "transcription": result.get("transcription", "")
+                }
+            )
         finally:
             # 임시 파일 삭제
             if os.path.exists(temp_path):
@@ -793,101 +740,114 @@ async def transcribe(
                     logger.info(f"Cleaned up temporary file: {temp_path}")
                 except Exception as cleanup_error:
                     logger.warning(f"Failed to cleanup temp file: {cleanup_error}")
-    
+
     except HTTPException:
-        # HTTPException은 그대로 재발생
+        # HTTPException은 그대로 상위로 전달되어 JSON으로 응답됨
         raise
-    
+
     except FileNotFoundError as e:
-        logger.error(f"File not found error: {e}")
+        logger.error(f"File not found: {e}")
         return JSONResponse(
-            status_code=404,
+            status_code=status.HTTP_404_NOT_FOUND,
             content={"success": False, "message": f"Audio file not found: {str(e)}"}
         )
-    
+
     except ValueError as e:
         logger.error(f"Audio processing error: {e}")
         return JSONResponse(
-            status_code=400,
-            content={
-                "success": False, 
-                "message": str(e),
-                "error_details": "Audio format conversion failed"
-            }
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"success": False, "message": str(e), "error_details": "Audio format conversion failed"}
         )
-    
+
     except RuntimeError as e:
         logger.error(f"Runtime error: {e}")
-        error_message = str(e)
-        if "FFmpeg" in error_message:
+        msg = str(e)
+        if "FFmpeg" in msg:
             return JSONResponse(
-                status_code=500,
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 content={
-                    "success": False, 
+                    "success": False,
                     "message": "Audio conversion service unavailable",
-                    "error_details": "FFmpeg is required for audio conversion. Please contact administrator."
+                    "error_details": "FFmpeg이 필요합니다. 관리자에게 문의하세요."
                 }
             )
-        else:
-            return JSONResponse(
-                status_code=500,
-                content={"success": False, "message": f"Runtime error: {error_message}"}
-            )
-    
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"success": False, "message": f"Runtime error: {msg}"}
+        )
+
     except Exception as e:
         logger.error(f"Unexpected transcription error: {e}")
         return JSONResponse(
-            status_code=500,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={
-                "success": False, 
+                "success": False,
                 "message": "Transcription service temporarily unavailable",
-                "error_details": f"Internal error: {str(e)}"
+                "error_details": str(e)
             }
         )
 
-# STT UI 페이지 (녹음 버튼)
-@app.get("/transcribe", response_class=HTMLResponse)
-async def transcribe_page(request: Request):
-    user_id = request.session.get("user")
-    if not user_id:
-        return RedirectResponse(url="/login/", status_code=303)
-    return templates.TemplateResponse("transcribe.html", {"request": request})
 
-# ── TTS 페이지 렌더링 (GET) ─────────────────────────────────────────
-@app.get("/tts", response_class=HTMLResponse)
-async def tts_page(request: Request):
-    """
-    텍스트 입력 폼을 보여주는 페이지.
-    """
-    # audio_uri=None ⇒ 재생 없음 (오디오 없음)
-    return templates.TemplateResponse("tts.html", {"request": request, "audio_uri": None})
+# ---------------------------------------------------
+# TTS 엔드포인트 (JSON)
+# ---------------------------------------------------
 
-
-# ── TTS 요청 처리 (POST) ─────────────────────────────────────────
-@app.post("/tts", response_class=HTMLResponse)
-async def tts_submit(request: Request, text_input: str = Form(...)):
+@app.post("/tts/")
+async def tts_api(
+    text_input: str = Form(...)
+):
     """
-    사용자가 입력한 text_input을 받아
-    1) 언어 감지(lan_det)
-    2) TTS 생성(request_tts) → bytes 반환
-    3) Base64 인코딩하여 data URI 형태로 템플릿에 전달
+    text_input(폼 필드) → 언어 감지 → TTS 음성(bytes) → Base64 인코딩된 Data URI 반환
     """
-    # 1) 언어 감지
+    # 언어 감지
     lang_code = lan_det(text_input)
     if not lang_code:
-        # 감지 실패 시, 오디오 없이 폼만 다시 렌더링
-        return templates.TemplateResponse("tts.html", {"request": request, "audio_uri": None})
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"success": False, "message": "Language detection failed"}
+        )
 
-    # 2) TTS 생성 → mp3 bytes
+    # TTS 생성
     audio_bytes = request_tts(text_input, lang_code)
     if not audio_bytes:
-        # TTS 실패 시, 오디오 없이 폼만 다시 렌더링
-        return templates.TemplateResponse("tts.html", {"request": request, "audio_uri": None})
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"success": False, "message": "TTS generation failed"}
+        )
 
-    # 3) Base64 인코딩 & Data URI 생성
+    # Base64 인코딩
     import base64
     b64_str = base64.b64encode(audio_bytes).decode("utf-8")
     data_uri = f"data:audio/mpeg;base64,{b64_str}"
 
-    # 4) 데이터 URI를 템플릿에 넘겨주면, 브라우저에서 <audio src="data:…">로 재생
-    return templates.TemplateResponse("tts.html", {"request": request, "audio_uri": data_uri})
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={
+            "success": True,
+            "language": lang_code,
+            "audio_data_uri": data_uri
+        }
+    )
+
+
+@app.get("/tts-info/")
+async def tts_info():
+    """
+    클라이언트에게 TTS API 사용법을 JSON으로 안내
+    """
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={
+            "description": "POST /tts/ 에 폼 필드 'text_input'을 보내면, Base64 인코딩된 오디오 Data URI를 반환합니다.",
+            "method": "POST",
+            "endpoint": "/tts/",
+            "form_fields": {
+                "text_input": "TTS로 변환할 문자열"
+            },
+            "response_example": {
+                "success": True,
+                "language": "<감지된 언어 코드>",
+                "audio_data_uri": "data:audio/mpeg;base64,...."
+            }
+        }
+    )
