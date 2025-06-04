@@ -94,6 +94,14 @@ async def get_current_user(request: Request) -> str | None:
 # 인증: 회원가입 / 로그인 / 로그아웃
 # ---------------------------------------------------
 
+
+@app.get("/check_userid/", summary="userID 중복 확인")
+async def check_userid(userID: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.userID == userID))
+    exists = result.scalar_one_or_none() is not None
+    return JSONResponse(status_code=200, content={"available": not exists})
+
+
 @app.post("/signup/", status_code=status.HTTP_201_CREATED)
 async def signup(
     userID: str = Form(...),
@@ -104,12 +112,12 @@ async def signup(
     userLanguage: str = Form(...),
     db: AsyncSession = Depends(get_db),
 ):
-    # 사용자 ID 중복 확인
-    result = await db.execute(select(User).where(User.userID == userID))
-    if result.scalar_one_or_none():
+    # 이메일 중복 확인만 수행
+    result_email = await db.execute(select(User).where(User.userEmail == userEmail))
+    if result_email.scalar_one_or_none():
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
-            content={"success": False, "error": "이미 존재하는 사용자입니다."}
+            content={"success": False, "error": "이미 존재하는 이메일입니다."}
         )
 
     # 비밀번호 해싱
@@ -126,16 +134,16 @@ async def signup(
     try:
         await create_user(db, user_in)
     except IntegrityError:
+        # userID 중복인 경우
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
-            content={"success": False, "error": "이미 존재하는 ID 또는 이메일입니다."}
+            content={"success": False, "error": "이미 존재하는 사용자ID입니다."}
         )
 
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,
         content={"success": True, "message": "회원가입 성공"}
     )
-
 
 @app.post("/login/")
 async def login(
