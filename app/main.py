@@ -23,6 +23,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from dotenv import load_dotenv
 from zoneinfo import ZoneInfo
 from pydantic import EmailStr
+from sqlalchemy import delete
 
 from passlib.context import CryptContext
 
