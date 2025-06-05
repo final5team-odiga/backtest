@@ -24,6 +24,7 @@ from dotenv import load_dotenv
 from zoneinfo import ZoneInfo
 from pydantic import EmailStr
 from sqlalchemy import delete
+from typing import List
 
 from passlib.context import CryptContext
 
@@ -50,6 +51,7 @@ from app.crud import (
 )
 from app.stt import transcribe_audio
 from app.tts import lan_det, request_tts
+from app.azure_utils import upload_image, delete_image, list_images, get_image_sas_url
 
 # ---------------------------------------------------
 # 환경 변수 로드 및 기본 설정
@@ -179,6 +181,16 @@ async def logout(request: Request):
 # ---------------------------------------------------
 # 게시판 CRUD (Articles / Comments / Likes)
 # ---------------------------------------------------
+
+
+# 홈페이지 /articles로 리다이렉트
+@app.get("/")
+async def home_redirect():
+    return JSONResponse(
+        status_code=200,
+        content={"redirect": "/articles/"}
+    )
+
 
 @app.get("/articles/")
 async def list_articles(db: AsyncSession = Depends(get_db)):
@@ -860,3 +872,47 @@ async def tts_info():
             }
         }
     )
+
+
+# ---------------------------------------------------
+# 블롭 스토리지 업로드 조회 삭제 엔드포인트 (JSON)
+# ---------------------------------------------------
+
+
+# 이미지 조회 (로그인 필요)
+@app.get("/images/")
+async def list_user_images(request: Request):
+    user_id = await get_current_user(request)
+    if not user_id:
+        return JSONResponse(status_code=401, content={"success": False, "message": "Login required"})
+
+    image_names = list_images(user_id)
+    image_urls = [get_image_sas_url(user_id, name) for name in image_names]
+
+    return JSONResponse(
+        status_code=200,
+        content={"success": True, "images": [{"name": n, "url": u} for n, u in zip(image_names, image_urls)]}
+    )
+
+# 이미지 업로드 (로그인 필요)
+@app.post("/images/upload/")
+async def upload_user_images(request: Request, files: List[UploadFile] = File(...)):
+    user_id = await get_current_user(request)
+    if not user_id:
+        return JSONResponse(status_code=401, content={"success": False, "message": "Login required"})
+
+    for file in files:
+        content = await file.read()
+        upload_image(user_id, file.filename, content)
+
+    return JSONResponse(status_code=201, content={"success": True, "message": "Images uploaded successfully."})
+
+# 이미지 삭제 (로그인 필요)
+@app.delete("/images/delete/")
+async def delete_user_image(request: Request, filename: str = Form(...)):
+    user_id = await get_current_user(request)
+    if not user_id:
+        return JSONResponse(status_code=401, content={"success": False, "message": "Login required"})
+
+    delete_image(user_id, filename)
+    return JSONResponse(status_code=200, content={"success": True, "message": "Image deleted successfully."})
