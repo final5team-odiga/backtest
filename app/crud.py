@@ -12,17 +12,15 @@ import uuid
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 async def create_user(db: AsyncSession, user: UserCreate):
-    hashed_password = pwd_context.hash(user.userPasswordHash)  # 비밀번호 해시화
-
+    # 이미 해시된 비밀번호가 들어오므로, 추가 해싱 없이 바로 저장
     db_user = User(
         userID=user.userID,
         userName=user.userName,
-        userPasswordHash=hashed_password,
+        userPasswordHash=user.userPasswordHash,  # 해싱 없이 그대로 저장
         userEmail=user.userEmail,
         userCountry=user.userCountry,
         userLanguage=user.userLanguage
     )
-    
     db.add(db_user)
     await db.commit()
     await db.refresh(db_user)
