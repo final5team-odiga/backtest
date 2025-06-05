@@ -17,6 +17,7 @@ class UserCreate(BaseModel):
 class ArticleCreate(BaseModel):
     articleTitle: str
     articleAuthor: str
+    content: Optional[str]
     imageURL: Optional[str] = None
     travelCountry: str
     travelCity: str
@@ -28,6 +29,7 @@ class ArticleCreate(BaseModel):
 
 class ArticleUpdate(BaseModel):
     articleTitle: Optional[str] = None
+    content: Optional[str] = None
     imageURL: Optional[str] = None
     travelCountry: Optional[str] = None
     travelCity: Optional[str] = None

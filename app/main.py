@@ -209,6 +209,7 @@ async def list_articles(db: AsyncSession = Depends(get_db)):
             "travelCity": art.travelCity,
             "shareLink": art.shareLink,
             "price": art.price,
+            "view_count": art.view_count,
             "createdAt": art.createdAt.isoformat(),
             "updatedAt": art.modifiedAt.isoformat() if art.modifiedAt else None
         })
@@ -229,6 +230,10 @@ async def article_detail(
     article = result.scalars().first()
     if not article:
         raise HTTPException(status_code=404, detail="Article not found")
+    
+    # 조회수 1 증가 (view_count를 1 올리고 DB에 반영)
+    article.view_count += 1
+    await db.commit()
 
     # 댓글 로드
     comments_result = await db.execute(
@@ -257,14 +262,17 @@ async def article_detail(
         "articleID": article.articleID,
         "articleTitle": article.articleTitle,
         "articleAuthor": article.articleAuthor,
+        "content": article.content,
         "imageURL": article.imageURL,
         "travelCountry": article.travelCountry,
         "travelCity": article.travelCity,
         "shareLink": article.shareLink,
         "price": article.price,
+        "view_count": article.view_count,
         "createdAt": article.createdAt.isoformat(),
         "updatedAt": article.modifiedAt.isoformat() if article.modifiedAt else None,
         "comments": comment_list,
+        "likes": article.likes,
         "userLiked": user_liked
     }
 
@@ -276,6 +284,7 @@ async def create_article_endpoint(
     request: Request,
     articleTitle: str = Form(...),
     imageURL: str = Form(None),
+    content: str = Form(...),
     travelCountry: str = Form(...),
     travelCity: str = Form(...),
     shareLink: str = Form(None),
@@ -295,6 +304,7 @@ async def create_article_endpoint(
     article_in = ArticleCreate(
         articleTitle=articleTitle,
         articleAuthor=user_id,
+        content = content,
         imageURL=imageURL,
         travelCountry=travelCountry,
         travelCity=travelCity,
@@ -318,6 +328,7 @@ async def edit_article(
     request: Request,
     article_id: str,
     articleTitle: str = Form(None),
+    content: str = Form(None),
     imageURL: str = Form(None),
     travelCountry: str = Form(None),
     travelCity: str = Form(None),
@@ -348,6 +359,7 @@ async def edit_article(
 
     update_in = ArticleUpdate(
         articleTitle=articleTitle,
+        content=content,
         imageURL=imageURL,
         travelCountry=travelCountry,
         travelCity=travelCity,
@@ -580,7 +592,9 @@ async def mypage(request: Request, db: AsyncSession = Depends(get_db)):
         "userEmail": user.userEmail,
         "userCountry": user.userCountry,
         "userLanguage": user.userLanguage,
+        "content": art.content,  
         "profileImage": user.profileImage,
+        "view_count": art.view_count,
         "createdAt": user.createdAt.isoformat(),
         "updatedAt": user.modifiedAt.isoformat() if user.modifiedAt else None,
         "myArticles": article_list

@@ -49,6 +49,7 @@ async def create_article(db: AsyncSession, article: ArticleCreate):
     db_article = Article(
         articleID=str(uuid.uuid4()),
         articleTitle=article.articleTitle,
+        content=article.content,
         articleAuthor=article.articleAuthor,
         imageURL=article.imageURL,
         travelCountry=article.travelCountry,
