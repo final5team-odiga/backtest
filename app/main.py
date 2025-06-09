@@ -15,15 +15,16 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import delete, func, update
 from starlette.middleware.sessions import SessionMiddleware
 from dotenv import load_dotenv
 from zoneinfo import ZoneInfo
 from pydantic import EmailStr
-from sqlalchemy import delete, func
-from fastapi.middleware.cors import CORSMiddleware
+from typing import List
 
 from passlib.context import CryptContext
 
@@ -50,6 +51,16 @@ from app.crud import (
 )
 from app.stt import transcribe_audio
 from app.tts import lan_det, request_tts
+from app.azure_utils import (
+    upload_image_if_not_exists,
+    delete_image,
+    list_images,
+    generate_blob_sas_url,
+    list_output_files,
+    upload_output_file,
+    is_image_safe_for_upload,
+    upload_profile_image
+)
 
 # ---------------------------------------------------
 # 환경 변수 로드 및 기본 설정
@@ -645,21 +656,43 @@ async def edit_profile(
 
     # 프로필 이미지가 업로드되었다면 저장하고 URL 업데이트
     if profile_image:
-        ext = os.path.splitext(profile_image.filename)[1]
-        save_dir = "static/profiles"
-        os.makedirs(save_dir, exist_ok=True)
-        save_path = f"{save_dir}/{user_id}{ext}"
+        
         content = await profile_image.read()
-        with open(save_path, "wb") as f:
-            f.write(content)
-        update_data["profileImage"] = f"/static/profiles/{user_id}{ext}"
+
+        # Optional: Safety check
+        is_safe, analysis = is_image_safe_for_upload(content, profile_image.filename)
+        if not is_safe:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"success": False, "message": "부적절한 이미지로 판단되어 업로드가 차단되었습니다.", "details": analysis}
+            )
+        
+        # Upload and get SAS-protected URL
+        image_url = upload_profile_image(user_id, content)
+        update_data["profileImage"] = image_url
 
     await db.execute(
-        (select(User))
-        .where(User.userID == user_id)
-        .execution_options(synchronize_session="fetch")
-        .update(update_data)
-    )
+    update(User)
+    .where(User.userID == user_id)
+    .values(**update_data)
+    .execution_options(synchronize_session="fetch"))
+    # 프로필 이미지가 업로드되었다면 저장하고 URL 업데이트
+    # if profile_image:
+    #     ext = os.path.splitext(profile_image.filename)[1]
+    #     save_dir = "static/profiles"
+    #     os.makedirs(save_dir, exist_ok=True)
+    #     save_path = f"{save_dir}/{user_id}{ext}"
+    #     content = await profile_image.read()
+    #     with open(save_path, "wb") as f:
+    #         f.write(content)
+    #     update_data["profileImage"] = f"/static/profiles/{user_id}{ext}"
+
+    # await db.execute(
+    #     (select(User))
+    #     .where(User.userID == user_id)
+    #     .execution_options(synchronize_session="fetch")
+    #     .update(update_data)
+    # )
     await db.commit()
 
     return JSONResponse(
@@ -907,3 +940,185 @@ async def country_counts(db: AsyncSession = Depends(get_db)):
     ]
 
     return JSONResponse(status_code=200, content={"success": True, "data": data})
+
+
+# ---------------------------------------------------
+# 블롭 스토리지 업로드 조회 삭제 엔드포인트 (JSON)
+# ---------------------------------------------------
+
+
+@app.get("/images/")
+async def list_user_images(request: Request, magazine_id: str):
+    """
+    Azure Blob Storage의 "user" Container 아래 {user_id}/magazine/{magazine_id}/images 폴더 속 이미지 조회
+    """
+    user_id = await get_current_user(request)
+    if not user_id:
+        return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"success": False, "message": "Login required"})
+
+    image_names = list_images(user_id, magazine_id)
+    image_urls = [generate_blob_sas_url(user_id, magazine_id, "images", name) for name in image_names]
+
+
+    return JSONResponse(
+        status_code=200,
+        content={"success": True, "images": [{"name": n, "url": u} for n, u in zip(image_names, image_urls)]}
+    )
+
+
+@app.post("/images/upload/")
+async def upload_user_images(request: Request, magazine_id: str = Form(...), files: List[UploadFile] = File(...)):
+    """
+    Azure Blob Storage의 "user" Container 아래 {user_id}/magazine/{magazine_id}/images 폴더에 이미지 업로드
+    """
+    user_id = await get_current_user(request)
+    if not user_id:
+        return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"success": False, "message": "Login required"})
+
+    uploaded = []
+    skipped = []
+
+    for file in files:
+        content = await file.read()
+
+        is_safe, result = is_image_safe_for_upload(content, file.filename)
+        if not is_safe:
+            skipped.append({"filename": file.filename, "reason": "Flagged by content safety", "details": result})
+            continue
+
+        success = upload_image_if_not_exists(user_id, magazine_id, file.filename, content)
+        if success:
+            uploaded.append(file.filename)
+        else:
+            skipped.append({"filename": file.filename, "reason": "Duplicate file"})
+
+    return JSONResponse(
+        status_code=207,
+        content={
+            "success": True,
+            "uploaded": uploaded,
+            "skipped": skipped,
+            "message": f"{len(uploaded)} uploaded, {len(skipped)} skipped."
+        }
+    )
+
+
+@app.delete("/images/delete/")
+async def delete_user_image(request: Request, magazine_id: str = Form(...), filename: str = Form(...)):
+    """
+    Azure Blob Storage의 "user" Container 아래 {user_id}/magazine/{magazine_id}/images 폴더 속 이미지 삭제
+    """
+    user_id = await get_current_user(request)
+    if not user_id:
+        return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"success": False, "message": "Login required"})
+
+    delete_image(user_id, magazine_id, filename)
+    return JSONResponse(status_code=200, content={"success": True, "message": "Image deleted successfully."})
+
+
+@app.get("/outputs/list/")
+async def list_outputs(request: Request, magazine_id: str):
+    """
+    Azure Blob Storage의 "user" Container 아래 {user_id}/magazine/{magazine_id}/outputs 폴더 속 파일 목록 조회
+    """
+    user_id = await get_current_user(request)
+    if not user_id:
+        return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"success": False, "message": "Login required"})
+
+    files = list_output_files(user_id, magazine_id)
+    return JSONResponse(status_code=200, content={"success": True, "files": files})
+
+
+@app.get("/download-output/")
+async def download_output_file(request: Request, filename: str, magazine_id: str):
+    """
+    Azure Blob Storage의 "user" Container 아래 {user_id}/magazine/{magazine_id}/outputs 폴더 속 파일 다운로드
+    """
+    user_id = await get_current_user(request)
+    if not user_id:
+        return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"success": False, "message": "Login required"})
+
+    try:
+        download_url = generate_blob_sas_url(user_id, magazine_id, "outputs", filename, expiry_minutes=60)
+        return JSONResponse(
+            status_code=200,
+            content={"success": True, "download_url": download_url, "filename": filename}
+        )
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": "Failed to generate download URL", "error": str(e)})
+
+
+@app.post("/outputs/upload/")
+async def upload_output_file_endpoint(request: Request, magazine_id: str = Form(...), file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
+    """
+    Azure Blob Storage의 "user" Container 아래 {user_id}/magazine/{magazine_id}/outputs 폴더 속 파일 업로드
+    """
+    user_id = await get_current_user(request)
+    if not user_id:
+        return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"success": False, "message": "Login required"})
+
+    content = await file.read()
+
+    # Upload the PDF to Azure Blob Storage
+    upload_output_file(user_id, magazine_id, file.filename, content)
+
+    # Generate SAS URL
+    pdf_url = generate_blob_sas_url(user_id, magazine_id, "outputs", file.filename, expiry_minutes=60)
+
+    # Save SAS URL to User.outputPdf
+    await db.execute(
+        update(User)
+        .where(User.userID == user_id)
+        .values(outputPdf=pdf_url)
+        .execution_options(synchronize_session="fetch")
+    )
+    await db.commit()
+
+    return JSONResponse(
+        status_code=201,
+        content={"success": True, "message": f"Uploaded '{file.filename}' and saved URL to user profile", "pdf_url": pdf_url}
+    )
+
+@app.post("/texts/upload/")
+async def upload_interview_text(request: Request, magazine_id: str = Form(...), filename: str = Form(...), text: str = Form(...)):
+    user_id = await get_current_user(request)
+    if not user_id:
+        return JSONResponse(status_code=401, content={"success": False, "message": "Login required"})
+    
+    from app.azure_utils import upload_interview_result
+    upload_interview_result(user_id, magazine_id, filename, text.encode("utf-8"))
+    
+    return JSONResponse(status_code=201, content={"success": True, "message": f"Uploaded '{filename}'"})
+
+@app.get("/texts/download/")
+async def download_interview_text(request: Request, magazine_id: str, filename: str):
+    user_id = await get_current_user(request)
+    if not user_id:
+        return JSONResponse(status_code=401, content={"success": False, "message": "Login required"})
+
+    from app.azure_utils import download_interview_result
+    try:
+        content = download_interview_result(user_id, magazine_id, filename)
+        return JSONResponse(status_code=200, content={"success": True, "filename": filename, "content": content})
+    except FileNotFoundError:
+        return JSONResponse(status_code=404, content={"success": False, "message": "File not found"})
+
+@app.delete("/texts/delete/")
+async def delete_interview_text(request: Request, magazine_id: str = Form(...), filename: str = Form(...)):
+    user_id = await get_current_user(request)
+    if not user_id:
+        return JSONResponse(status_code=401, content={"success": False, "message": "Login required"})
+
+    from app.azure_utils import delete_interview_result
+    success = delete_interview_result(user_id, magazine_id, filename)
+    return JSONResponse(status_code=200 if success else 404, content={"success": success})
+
+@app.get("/texts/list/")
+async def list_interview_texts(request: Request, magazine_id: str):
+    user_id = await get_current_user(request)
+    if not user_id:
+        return JSONResponse(status_code=401, content={"success": False, "message": "Login required"})
+
+    from app.azure_utils import list_text_files
+    files = list_text_files(user_id, magazine_id)
+    return JSONResponse(status_code=200, content={"success": True, "files": files})

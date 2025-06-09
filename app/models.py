@@ -14,6 +14,7 @@ class User(Base):
     userCountry = Column(String)
     userLanguage = Column(String)
     profileImage = Column(String, nullable=True)  # 업로드한 사진 경로 저장
+    outputPdf = Column(String, nullable=True)     # 완성된 잡지 경로 저장
     
     articles = relationship("Article", back_populates="author")
     comments = relationship("Comment", back_populates="user")
