@@ -13,8 +13,9 @@ azure-cognitiveservices-speech==1.34.1
 azure-storage-blob==12.25.1
 azure-ai-contentsafety
 python-dotenv>=1.0.1
-requests>=2.31.0
+requests>=2.31.0s
 pydub>=0.25.1
 ffmpeg-python>=0.2.0
+pillow
 
 #pydantic

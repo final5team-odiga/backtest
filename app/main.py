@@ -59,8 +59,10 @@ from app.azure_utils import (
     list_output_files,
     upload_output_file,
     is_image_safe_for_upload,
-    upload_profile_image
+    upload_profile_image,
+    delete_interview_result
 )
+from azure.core.exceptions import ResourceNotFoundError
 
 # ---------------------------------------------------
 # 환경 변수 로드 및 기본 설정
@@ -979,18 +981,26 @@ async def upload_user_images(request: Request, magazine_id: str = Form(...), fil
     skipped = []
 
     for file in files:
-        content = await file.read()
+        try:
+            content = await file.read()
 
-        is_safe, result = is_image_safe_for_upload(content, file.filename)
-        if not is_safe:
-            skipped.append({"filename": file.filename, "reason": "Flagged by content safety", "details": result})
-            continue
-
-        success = upload_image_if_not_exists(user_id, magazine_id, file.filename, content)
-        if success:
-            uploaded.append(file.filename)
-        else:
-            skipped.append({"filename": file.filename, "reason": "Duplicate file"})
+            # The updated function now handles safety check, processing, and naming internally
+            success, final_filename = upload_image_if_not_exists(user_id, magazine_id, file.filename, content)
+            
+            if success:
+                uploaded.append({
+                    "original_filename": file.filename,
+                    "stored_filename": final_filename
+                })
+            else:
+                skipped.append({"filename": file.filename, "reason": "Upload failed"})
+                
+        except ValueError as e:
+            # Handle validation errors (unsupported format, content safety, etc.)
+            skipped.append({"filename": file.filename, "reason": str(e)})
+        except Exception as e:
+            # Handle other errors
+            skipped.append({"filename": file.filename, "reason": f"Upload error: {str(e)}"})
 
     return JSONResponse(
         status_code=207,
@@ -1079,42 +1089,52 @@ async def upload_output_file_endpoint(request: Request, magazine_id: str = Form(
         content={"success": True, "message": f"Uploaded '{file.filename}' and saved URL to user profile", "pdf_url": pdf_url}
     )
 
+
 @app.post("/texts/upload/")
-async def upload_interview_text(request: Request, magazine_id: str = Form(...), filename: str = Form(...), text: str = Form(...)):
+async def upload_interview_text(request: Request, magazine_id: str = Form(...), text: str = Form(...)):
+    """
+    Azure Blob Storage의 "user" Container 아래 {user_id}/magazine/{magazine_id}/texts 폴더 속 텍스트 파일 업로드
+    """
     user_id = await get_current_user(request)
     if not user_id:
         return JSONResponse(status_code=401, content={"success": False, "message": "Login required"})
     
     from app.azure_utils import upload_interview_result
-    upload_interview_result(user_id, magazine_id, filename, text.encode("utf-8"))
+    blob_path = upload_interview_result(user_id, magazine_id, text.encode("utf-8"))
     
-    return JSONResponse(status_code=201, content={"success": True, "message": f"Uploaded '{filename}'"})
+    # Extract the actual filename from the blob path
+    final_filename = blob_path.split("/")[-1]
+    
+    return JSONResponse(status_code=201, content={
+        "success": True, 
+        "message": f"Uploaded '{final_filename}'",
+        "filename": final_filename
+    })
 
-@app.get("/texts/download/")
-async def download_interview_text(request: Request, magazine_id: str, filename: str):
-    user_id = await get_current_user(request)
-    if not user_id:
-        return JSONResponse(status_code=401, content={"success": False, "message": "Login required"})
-
-    from app.azure_utils import download_interview_result
-    try:
-        content = download_interview_result(user_id, magazine_id, filename)
-        return JSONResponse(status_code=200, content={"success": True, "filename": filename, "content": content})
-    except FileNotFoundError:
-        return JSONResponse(status_code=404, content={"success": False, "message": "File not found"})
 
 @app.delete("/texts/delete/")
 async def delete_interview_text(request: Request, magazine_id: str = Form(...), filename: str = Form(...)):
+    """
+    Azure Blob Storage의 "user" Container 아래 {user_id}/magazine/{magazine_id}/texts 폴더 속 텍스트 파일 삭제
+    """
     user_id = await get_current_user(request)
     if not user_id:
         return JSONResponse(status_code=401, content={"success": False, "message": "Login required"})
 
-    from app.azure_utils import delete_interview_result
-    success = delete_interview_result(user_id, magazine_id, filename)
-    return JSONResponse(status_code=200 if success else 404, content={"success": success})
+    try:
+        delete_interview_result(user_id, magazine_id, filename)
+        return JSONResponse(status_code=200, content={"success": True})
+    except ResourceNotFoundError:
+        return JSONResponse(status_code=404, content={"success": False, "message": "File not found"})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
 
 @app.get("/texts/list/")
 async def list_interview_texts(request: Request, magazine_id: str):
+    """
+    Azure Blob Storage의 "user" Container 아래 {user_id}/magazine/{magazine_id}/texts 폴더 속 텍스트 파일 조회
+    """
     user_id = await get_current_user(request)
     if not user_id:
         return JSONResponse(status_code=401, content={"success": False, "message": "Login required"})

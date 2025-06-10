@@ -3,10 +3,12 @@ from azure.storage.blob import BlobServiceClient, ContainerClient, generate_blob
 from azure.ai.contentsafety import ContentSafetyClient
 from azure.ai.contentsafety.models import AnalyzeImageOptions, ImageData, ImageCategory
 from azure.core.credentials import AzureKeyCredential
-from azure.core.exceptions import ResourceNotFoundError, ResourceExistsError, HttpResponseError
+from azure.core.exceptions import HttpResponseError, ResourceNotFoundError, ResourceExistsError
 from dotenv import load_dotenv
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from PIL import Image, ImageOps
+import io
 
 # Get the directory where azure_utils.py is located
 current_dir = Path(__file__).parent
@@ -38,14 +40,47 @@ def get_or_create_container():
 def build_blob_path(user_id: str, magazine_id: str, category: str, filename: str) -> str:
     return f"{user_id}/magazine/{magazine_id}/{category}/{filename}"
 
-def upload_image_if_not_exists(user_id: str, magazine_id: str, filename: str, content: bytes) -> bool:
+
+def upload_image_if_not_exists(user_id: str, magazine_id: str, filename: str, content: bytes) -> tuple[bool, str]:
+    """
+    Upload image with processing, safety check, and sequential naming.
+    Returns (uploaded, final_filename)
+    """
+    # Check file extension
+    if not is_supported_image_format(filename):
+        raise ValueError(f"Unsupported image format: {filename}")
+    
+    # Check content safety first (with original content)
+    is_safe, safety_result = is_image_safe_for_upload(content, filename)
+    if not is_safe:
+        raise ValueError(f"Image failed content safety check: {safety_result}")
+    
+    # Process image (convert to RGB, apply EXIF rotation)
+    processed_content = process_image_bytes(content)
+    
+    # Generate sequential filename
+    new_filename = get_next_image_name(user_id, magazine_id)
+    
+    # Upload processed image
     container_client = get_or_create_container()
-    blob_path = build_blob_path(user_id, magazine_id, "images", filename)
+    blob_path = build_blob_path(user_id, magazine_id, "images", new_filename)
     blob_client = container_client.get_blob_client(blob_path)
-    if blob_client.exists():
-        return False
-    blob_client.upload_blob(content, overwrite=False)
-    return True
+    
+    blob_client.upload_blob(
+        processed_content, 
+        overwrite=False,
+        content_settings=ContentSettings(content_type="image/jpeg")
+    )
+    
+    return True, new_filename
+# def upload_image_if_not_exists(user_id: str, magazine_id: str, filename: str, content: bytes) -> bool:
+#     container_client = get_or_create_container()
+#     blob_path = build_blob_path(user_id, magazine_id, "images", filename)
+#     blob_client = container_client.get_blob_client(blob_path)
+#     if blob_client.exists():
+#         return False
+#     blob_client.upload_blob(content, overwrite=False)
+#     return True
 
 def delete_image(user_id: str, magazine_id: str, filename: str):
     container_client = get_or_create_container()
@@ -216,10 +251,28 @@ def upload_profile_image(user_id: str, content: bytes, filename: str = "profile_
 
     return f"https://{AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/user/{blob_path}?{sas_token}"
 
-def upload_interview_result(user_id: str, magazine_id: str, filename: str, content: bytes):
+def upload_interview_result(user_id: str, magazine_id: str, content: bytes):
     container_client = get_or_create_container()
-    blob_path = build_blob_path(user_id, magazine_id, "texts", filename)
-    blob_client = container_client.get_blob_client(blob_path)
+    
+    # Generate date-based filename
+    current_date = datetime.now()
+    base_filename = f"interview_{current_date.month:02d}-{current_date.day:02d}"
+    
+    # Check for existing files and add counter if needed
+    counter = 1
+    final_filename = f"{base_filename}.txt"
+    
+    while True:
+        blob_path = build_blob_path(user_id, magazine_id, "texts", final_filename)
+        blob_client = container_client.get_blob_client(blob_path)
+        
+        if not blob_client.exists():
+            break
+        
+        # File exists, try next number
+        final_filename = f"{base_filename}_{counter}.txt"
+        counter += 1
+    
     blob_client.upload_blob(content, overwrite=True, content_settings=ContentSettings(content_type="text/plain"))
     return blob_path
 
@@ -317,82 +370,70 @@ def list_user_folders(user_id: str) -> list:
     except Exception:
         return []
 
-def download_interview_result(user_id: str, magazine_id: str, filename: str) -> str:
+def delete_interview_result(user_id: str, magazine_id: str, filename: str):
+    """Delete a stored interview result file."""
     container_client = get_or_create_container()
     blob_path = build_blob_path(user_id, magazine_id, "texts", filename)
     blob_client = container_client.get_blob_client(blob_path)
-    try:
-        content = blob_client.download_blob().readall()
-        return content.decode("utf-8")
-    except ResourceNotFoundError:
-        raise FileNotFoundError(f"File not found: {blob_path}")
-
-# def download_interview_result(user_id: str, folder_name: str, filename: str) -> str:
-#     """
-#     저장된 인터뷰 결과를 다운로드합니다.
-    
-#     Args:
-#         user_id: 사용자 ID
-#         folder_name: 폴더명
-#         filename: 파일명
-        
-#     Returns:
-#         str: 파일 내용
-#     """
-#     try:
-#         container_client = get_or_create_container()
-#         blob_path = f"{user_id}/magazine/{folder_name}/texts/{filename}"
-#         blob_client = container_client.get_blob_client(blob_path)
-        
-#         content = blob_client.download_blob().readall()
-#         return content.decode('utf-8')
-        
-#     except ResourceNotFoundError:
-#         logger.warning(f"파일을 찾을 수 없음: {blob_path}")
-#         raise FileNotFoundError(f"파일을 찾을 수 없습니다: {filename}")
-#     except Exception as e:
-#         logger.error(f"파일 다운로드 실패: {str(e)}")
-#         raise Exception(f"파일 다운로드 실패: {str(e)}")
-
-def delete_interview_result(user_id: str, magazine_id: str, filename: str) -> bool:
-    container_client = get_or_create_container()
-    blob_path = build_blob_path(user_id, magazine_id, "texts", filename)
-    blob_client = container_client.get_blob_client(blob_path)
-    try:
-        blob_client.delete_blob()
-        return True
-    except ResourceNotFoundError:
-        return False
-
-# def delete_interview_result(user_id: str, folder_name: str, filename: str) -> bool:
-#     """
-#     저장된 인터뷰 결과를 삭제합니다.
-    
-#     Args:
-#         user_id: 사용자 ID
-#         folder_name: 폴더명
-#         filename: 파일명
-        
-#     Returns:
-#         bool: 삭제 성공 여부
-#     """
-#     try:
-#         container_client = get_or_create_container()
-#         blob_path = f"{user_id}/magazine/{folder_name}/texts/{filename}"
-#         blob_client = container_client.get_blob_client(blob_path)
-        
-#         blob_client.delete_blob()
-#         logger.info(f"파일 삭제 완료: {blob_path}")
-#         return True
-        
-#     except ResourceNotFoundError:
-#         logger.warning(f"삭제할 파일을 찾을 수 없음: {blob_path}")
-#         return False
-#     except Exception as e:
-#         logger.error(f"파일 삭제 실패: {str(e)}")
-#         return False
+    blob_client.delete_blob()
 
 def list_text_files(user_id: str, magazine_id: str):
     container_client = get_or_create_container()
     prefix = f"{user_id}/magazine/{magazine_id}/texts/"
     return [blob.name[len(prefix):] for blob in container_client.list_blobs(name_starts_with=prefix)]
+
+
+def process_image_bytes(image_bytes: bytes) -> bytes:
+    """
+    Process image bytes: apply EXIF rotation and convert to RGB
+    Returns processed image as JPEG bytes
+    """
+    # Open image directly from bytes
+    img = Image.open(io.BytesIO(image_bytes))
+    
+    # Apply EXIF rotation
+    img = ImageOps.exif_transpose(img)
+    
+    # Convert to RGB (JPEG doesn't support RGBA)
+    if img.mode in ('RGBA', 'LA', 'P'):
+        background = Image.new('RGB', img.size, (255, 255, 255))
+        if img.mode == 'P':
+            img = img.convert('RGBA')
+        background.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
+        img = background
+    elif img.mode != 'RGB':
+        img = img.convert('RGB')
+    
+    # Convert back to bytes
+    output_buffer = io.BytesIO()
+    img.save(output_buffer, format='JPEG', quality=95, optimize=True)
+    return output_buffer.getvalue()
+
+
+def is_supported_image_format(filename: str) -> bool:
+    """Check if file extension is supported"""
+    supported_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.heic', '.heif', '.webp'}
+    return Path(filename).suffix.lower() in supported_extensions
+
+
+def get_next_image_name(user_id: str, magazine_id: str) -> str:
+    """Generate next sequential image name (image1.jpg, image2.jpg, etc.)"""
+    container_client = get_or_create_container()
+    prefix = f"{user_id}/magazine/{magazine_id}/images/"
+    
+    existing_blobs = list(container_client.list_blobs(name_starts_with=prefix))
+    existing_numbers = []
+    
+    for blob in existing_blobs:
+        filename = blob.name[len(prefix):]
+        if filename.startswith('image') and filename.endswith('.jpg'):
+            try:
+                number_str = filename[5:-4]  # Remove "image" and ".jpg"
+                existing_numbers.append(int(number_str))
+            except ValueError:
+                continue
+    
+    next_number = max(existing_numbers) + 1 if existing_numbers else 1
+    return f"image{next_number}.jpg"
+
+
