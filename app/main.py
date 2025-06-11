@@ -3,6 +3,10 @@ import logging
 import tempfile
 import uuid
 
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+
 from fastapi import (
     FastAPI,
     Request,
@@ -49,6 +53,15 @@ from app.crud import (
     toggle_like,
     check_user_liked
 )
+
+from app.models import Daily
+from app.schemas import DailyCreate, DailyRead
+from sqlalchemy.future import select
+from dotenv import load_dotenv
+load_dotenv()
+import os
+
+
 from app.stt import transcribe_audio
 from app.tts import lan_det, request_tts
 from app.azure_utils import (
@@ -78,6 +91,8 @@ logger = logging.getLogger(__name__)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 app = FastAPI(title="CRUD & STT Web App (JSON API)")
+templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
+
 
 # CORS 설정 추가
 app.add_middleware(
@@ -733,6 +748,11 @@ async def delete_account(request: Request, db: AsyncSession = Depends(get_db)):
 # STT 엔드포인트 (JSON)
 # ---------------------------------------------------
 
+@app.get("/transcribe/", response_class=HTMLResponse, include_in_schema=False)
+async def serve_transcribe_html(request: Request):
+    return templates.TemplateResponse("transcribe.html", {"request": request})
+
+
 @app.post("/transcribe/")
 async def transcribe(
     request: Request,
@@ -1142,3 +1162,108 @@ async def list_interview_texts(request: Request, magazine_id: str):
     from app.azure_utils import list_text_files
     files = list_text_files(user_id, magazine_id)
     return JSONResponse(status_code=200, content={"success": True, "files": files})
+
+
+# ### app/main.py
+# import os, logging
+# from fastapi import FastAPI
+# from fastapi.staticfiles import StaticFiles
+# from fastapi.middleware.cors import CORSMiddleware
+# from starlette.middleware.sessions import SessionMiddleware
+# from dotenv import load_dotenv
+
+# from app.database import create_tables
+
+# # routes
+# from app.routes import auth, articles, comments, likes, profile, stt_tts, storage
+
+# load_dotenv()
+
+# app = FastAPI(title="CRUD & STT Web App (JSON API)")
+
+# # 미들웨어 설정
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=["http://localhost:3000"],
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
+# app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET_KEY"))
+
+# # static files
+# if not os.path.isdir("static"):
+#     os.makedirs("static/profiles", exist_ok=True)
+# app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# @app.on_event("startup")
+# async def on_startup():
+#     await create_tables()
+
+# # 라우터 등록
+# app.include_router(auth.router)
+# app.include_router(articles.router)
+# app.include_router(comments.router)
+# app.include_router(likes.router)
+# app.include_router(profile.router)
+# app.include_router(stt_tts.router)
+# app.include_router(storage.router)
+
+
+
+# Daily 레코드 생성 함수
+async def create_daily(db: AsyncSession, user_id: str, daily_data: DailyCreate):
+    db_daily = Daily(
+        userID=user_id,
+        date=daily_data.date,
+        season=daily_data.season,
+        weather=daily_data.weather,
+        temperature=daily_data.temperature,
+        mood=daily_data.mood,
+        country=daily_data.country
+    )
+    db.add(db_daily)
+    await db.commit()
+    await db.refresh(db_daily)
+    return db_daily
+
+# 내 캘린더 기록 모두 조회 함수
+async def get_dailies_for_user(db: AsyncSession, user_id: str):
+    result = await db.execute(
+        select(Daily).where(Daily.userID == user_id).order_by(Daily.date.asc())
+    )
+    return result.scalars().all()
+
+@app.post("/mypage/daily/", response_model=DailyRead)
+async def add_daily(
+    request: Request,
+    date: str = Form(...),
+    season: str = Form(...),
+    weather: str = Form(...),
+    temperature: float = Form(...),
+    mood: str = Form(None),
+    country: str = Form(...),
+    db: AsyncSession = Depends(get_db)
+):
+    user_id = await get_current_user(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
+    from datetime import datetime
+    daily_create = DailyCreate(
+        date=datetime.fromisoformat(date),
+        season=season,
+        weather=weather,
+        temperature=temperature,
+        mood=mood,
+        country=country
+    )
+    daily = await create_daily(db, user_id, daily_create)
+    return daily
+
+@app.get("/mypage/daily/", response_model=list[DailyRead])
+async def daily_calendar(request: Request, db: AsyncSession = Depends(get_db)):
+    user_id = await get_current_user(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
+    dailies = await get_dailies_for_user(db, user_id)
+    return dailies

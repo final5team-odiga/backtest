@@ -575,7 +575,7 @@
           formData.append("audio_file", fileInput.files[0]);
 
           try {
-            const response = await fetch("/transcribe", {
+            const response = await fetch("/transcribe/", {
               method: "POST",
               body: formData,
             });
